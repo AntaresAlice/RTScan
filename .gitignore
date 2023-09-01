@@ -1,0 +1,43 @@
+# data
+data/
+*.dat
+
+# executable
+bindexnoval
+bindexraw
+bindex
+transferData
+*.a
+*.o
+/optix-scan/build
+/optix-scan/script
+*.exec
+
+# vscode
+.vscode/
+
+# log file
+log/
+*.log
+*.png
+
+# optix-scan
+/optix-scan/build
+/optix-scan/script
+/optix-scan/src/optixScan/README.md
+/optix-scan/src/optixScan/test*
+/optix-scan/src/optixScan/data
+/optix-scan/src/optixScan/logs
+/optix-scan/src/optixScan/result
+/optix-scan/src/optixScan/tmp.log
+
+/script
+
+# test script
+test_backup/
+/test/tmp
+*.exec
+tools/generateNormalData
+tools/generateUniformData
+/pic
+/experiments

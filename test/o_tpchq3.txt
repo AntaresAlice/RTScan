@@ -1,0 +1,19 @@
+gt 19951893
+lt 19951893
+lt 2
+exit
+q3_withoutEncode 等价于 eq 1，因为是第一个，直接 refine
+
+gt 19951893
+lt 19951893
+eq 1
+exit
+q3_withoutEncode
+
+lt 19951893
+lt 19951893
+eq 7
+exit
+q3_withoutEncode
+
+
