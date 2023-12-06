@@ -3,10 +3,14 @@ data/
 *.dat
 
 # executable
-bindexnoval
-bindexraw
-bindex
-transferData
+/bindex
+/bindex_cuda
+/rtscan
+/rtscan_2c
+/rtscan_interval_spacing
+/rtc1
+/rtc3
+/simple_bindex
 *.a
 *.o
 /optix-scan/build
@@ -31,7 +35,6 @@ log/
 /optix-scan/src/optixScan/result
 /optix-scan/src/optixScan/tmp.log
 
-/script
 
 # test script
 test_backup/

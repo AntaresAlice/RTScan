@@ -31,11 +31,6 @@
 #define THREAD_NUM 20
 #define MAX_BINDEX_NUM 256
 
-#if !defined(WIDTH_4) && !defined(WIDTH_8) && !defined(WIDTH_12) && !defined(WIDTH_16) && !defined(WIDTH_20) && \
-    !defined(WIDTH_24) && !defined(WIDTH_28) && !defined(WIDTH_32)
-#define WIDTH_32
-#endif
-
 #ifndef VAREA_N
 #define VAREA_N 128   // 128
 #endif
@@ -61,74 +56,11 @@
     printf(msg " time: %f ms\n", elapsed);         \
   } while (0);
 
-#define BATCH_BLOCK_INSERT 0
-
-/*
-  optional code width
-*/
-#ifdef WIDTH_4
-typedef uint8_t CODE;
-#define MAXCODE ((1 << 4) - 1)
-#define MINCODE 0
-#define CODEWIDTH 4
-#define LOADSHIFT 4
-#endif
-
-#ifdef WIDTH_8
-typedef uint8_t CODE;
-#define MAXCODE ((1 << 8) - 1)
-#define MINCODE 0
-#define CODEWIDTH 8
-#define LOADSHIFT 0
-#endif
-
-#ifdef WIDTH_12
-typedef uint16_t CODE;
-#define MAXCODE ((1 << 12) - 1)
-#define MINCODE 0
-#define CODEWIDTH 12
-#define LOADSHIFT 4
-#endif
-
-#ifdef WIDTH_16
-typedef uint16_t CODE;
-#define MAXCODE ((1 << 16) - 1)
-#define MINCODE 0
-#define CODEWIDTH 16
-#define LOADSHIFT 0
-#endif
-
-#ifdef WIDTH_20
-typedef uint32_t CODE;
-#define MAXCODE ((1 << 20) - 1)
-#define MINCODE 0
-#define CODEWIDTH 20
-#define LOADSHIFT 12
-#endif
-
-#ifdef WIDTH_24
-typedef uint32_t CODE;
-#define MAXCODE ((1 << 24) - 1)
-#define MINCODE 0
-#define CODEWIDTH 24
-#define LOADSHIFT 8
-#endif
-
-#ifdef WIDTH_28
-typedef uint32_t CODE;
-#define MAXCODE ((1 << 28) - 1)
-#define MINCODE 0
-#define CODEWIDTH 28
-#define LOADSHIFT 4
-#endif
-
-#ifdef WIDTH_32
 typedef uint32_t CODE;
 #define MAXCODE ((1L << 32) - 1)
 #define MINCODE 0
 #define CODEWIDTH 32
 #define LOADSHIFT 0
-#endif
 
 
 #define DEBUG_TIME_COUNT 1
@@ -140,13 +72,22 @@ typedef uint32_t CODE;
 #endif
 
 #ifndef ENCODE
-#define ENCODE 0
+#define ENCODE 1
 #endif
 
 #define RANGE_SELECTIVITY_11
 
+#define SCAN_TYPE 0
+
+#ifndef ONLY_DATA_SIEVING
+#define ONLY_DATA_SIEVING 0
+#endif
+
+#ifndef ONLY_REFINE
+#define ONLY_REFINE 0
+#endif
+
 typedef int POSTYPE;  // Data type for positions
-// typedef int CODE;           // Codes are stored as int
 typedef unsigned int BITS;  // 32 0-1 bit results are stored in a BITS
 enum OPERATOR {
   EQ = 0,  // x == a
@@ -159,20 +100,16 @@ enum OPERATOR {
 
 const int RUNS = 1;
 
-// const int CODEWIDTH = sizeof(CODE) * 8;
 const int BITSWIDTH = sizeof(BITS) * 8;
 const int BITSSHIFT = 5;  // x / BITSWIDTH == x >> BITSSHIFT
 const int SIMD_ALIGEN = 32;
 const int SIMD_JOB_UNIT = 8;  // 8 * BITSWIDTH == __m256i
 
-const int blockInitSize = 3276;  // 2048  // TODO: tunable parameter for optimization
+const int blockInitSize = 3276;  // 2048
 const int blockMaxSize = 4096; // blockInitSize * 2;
 const int K = VAREA_N;  // Number of virtual areas
 const int N = (int)DATA_N;
-// const int MAXCODE = INT_MAX;
-// const int MINCODE = INT_MIN;
 const int blockNumMax = (N / (K * blockInitSize)) * 4;
-// const int blockNumMax = 2;
 
 extern Timer timer;
 
@@ -228,6 +165,9 @@ typedef struct {
   POSTYPE length;
   CODE data_min;
   CODE data_max;
+
+  Area *areasInGPU[K];
+  CODE *rawDataInGPU;
 } BinDex;
 
 inline int bits_num_needed(int n) {
@@ -238,15 +178,34 @@ inline int bits_num_needed(int n) {
 void copy_filter_vector_in_GPU(BinDex *bindex, BITS *dev_bitmap, int k, bool negation = false);
 void raw_scan(BinDex *bindex, BITS *bitmap, CODE target1, CODE target2, OPERATOR OP, CODE *raw_data, BITS* compare_bitmap = NULL);
 
+CODE **normalEncode(CODE **initialDataSet, int column_num, CODE encode_min, CODE encode_max, int data_num, POSTYPE **sorted_pos, CODE **sorted_data);
 CODE **normalEncode(CODE **initialDataSet, int column_num, CODE encode_min, CODE encode_max, int data_num);
 CODE encodeQuery(int column_id, CODE old_query);
 bool ifEncodeEqual(const CODE val1, const CODE val2, int bindex_id);
 CODE findKeyByValue(const CODE Val, std::map<CODE, int>& map_);
 
+template <typename T>
+POSTYPE *argsort(const T *v, POSTYPE n) {
+  POSTYPE *idx = (POSTYPE *)malloc(n * sizeof(POSTYPE));
+  for (POSTYPE i = 0; i < n; i++) {
+    idx[i] = i;
+  }
+  __gnu_parallel::sort(idx, idx + n, [&v](size_t i1, size_t i2) { return v[i1] < v[i2]; });
+  return idx;
+}
+
+template <typename T>
+POSTYPE *argsort(const T *v, POSTYPE n, POSTYPE *idx) {
+  for (POSTYPE i = 0; i < n; i++) {
+    idx[i] = i;
+  }
+  __gnu_parallel::sort(idx, idx + n, [&v](size_t i1, size_t i2) { return v[i1] < v[i2]; });
+  return idx;
+}
+
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-void showGPUInfo();
 cudaError_t refineWithCuda(CODE* bitmap, unsigned int size);
 cudaError_t GPUbitAndWithCuda(BITS* dev_bitmap_a, BITS* dev_bitmap_b, unsigned int n);
 cudaError_t GPUbitOrWithCuda(BITS* dev_bitmap_a, BITS* dev_bitmap_b, unsigned int n);
@@ -254,9 +213,33 @@ cudaError_t GPUbitCopyWithCuda(BITS* dev_bitmap_a, BITS* dev_bitmap_b, unsigned 
 cudaError_t GPUbitCopyNegationWithCuda(BITS* dev_bitmap_a, BITS* dev_bitmap_b, unsigned int n);
 cudaError_t GPUbitCopySIMDWithCuda(BITS* result, BITS* dev_bitmap_a, BITS* dev_bitmap_b, unsigned int bitnum);
 
+cudaError_t GPURefineAreaWithCuda(BinDex **bindexs, BITS *dev_result_bitmap, CODE *predicate, int selected_id, int column_num = 3, bool inverse = false);
+cudaError_t GPURefineEqAreaWithCuda(BinDex **bindexs, BITS *dev_result_bitmap, CODE *predicate, int selected_id, int column_num = 3, bool inverse = false);
+int in_which_area(BinDex *bindex, CODE compare);
+int in_which_block(Area *area, CODE compare);
+
+
 void initializeOptix(CODE **raw_data, int length, int density_width, int density_height, int column_num, CODE* range, 
-                     uint32_t cube_width);
-// ! ray_length is 'int' type which may be out of bound when it is too large.
+                     int cube_width);
 void refineWithOptix(BITS *dev_result_bitmap, double *predicate, int column_num,
                      int ray_length = -1, int ray_segment_num = 10, bool inverse = false, int direction = 2, int ray_mode = 0);
+
+void initializeOptixRTc3(CODE **raw_data, int length, int density_width, int density_height, int column_num, 
+                         CODE *range, uint32_t cube_width, int direction);
+void refineWithOptixRTc3(BITS *dev_result_bitmap, double *predicate, int column_num, 
+                            int ray_length = -1, int ray_segment_num = 10, bool inverse = false, int direction = 2, int ray_mode = 0);
+
+void initializeOptixRTc1(CODE **raw_data, int length, int density_width, int density_height, int column_num, CODE* range, int cube_width_factor,
+                         int ray_interval, int prim_size);
+void refineWithOptixRTc1(BITS *dev_result_bitmap, double *predicate, int column_num,
+                         int ray_length = -1, int ray_segment_num = 10, bool inverse = false, int direction = 2, int ray_mode = 0);
+
+void initializeOptixRTScan_2c(CODE **raw_data, int length, int density_width, int density_height, int column_num = 3);
+void refineWithOptixRTScan_2c(BITS *dev_result_bitmap, double *predicate, unsigned *range, 
+                              int column_num, int ray_segment_num = 1, bool inverse = false);
+
+void initializeOptixRTScan_interval_spacing(CODE **raw_data, int length, int density_width, int density_height, int column_num, CODE* range, double ray_interval_ratio);
+void refineWithOptixRTScan_interval_spacing(BITS *dev_result_bitmap, double *predicate, int column_num,
+                                            int ray_length, int ray_segment_num, bool inverse, int direction, int ray_mode,
+                                            double ray_distance_ratio);
 #endif

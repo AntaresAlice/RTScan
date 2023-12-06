@@ -1,31 +1,3 @@
-//
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions
-// are met:
-//  * Redistributions of source code must retain the above copyright
-//    notice, this list of conditions and the following disclaimer.
-//  * Redistributions in binary form must reproduce the above copyright
-//    notice, this list of conditions and the following disclaimer in the
-//    documentation and/or other materials provided with the distribution.
-//  * Neither the name of NVIDIA CORPORATION nor the names of its
-//    contributors may be used to endorse or promote products derived
-//    from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-// PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-// OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-
 #include <optix.h>
 #include <optix_function_table_definition.h>
 #include <optix_stack_size.h>
@@ -55,8 +27,6 @@
 #include <thrust/sort.h>
 #include <thrust/sequence.h>
 #include <thrust/gather.h>
-
-#define THREAD_NUM (sysconf(_SC_NPROCESSORS_ONLN) - 2)   // (20 - 2) = 18
 
 template <typename T>
 struct SbtRecord
@@ -104,7 +74,6 @@ inline void set_result_cpu(unsigned int *result, int pos, bool inverse) {
     }
 }
 
-// 假定 result 已申请好，且设置为 0
 void scan_with_cpu(const double3 *vertices, int data_num,
                    unsigned int *result, Predicate &predicate, bool inverse) {
     fprintf(stdout, "[OptiX] go into scan_with_cpu\n");
@@ -181,11 +150,13 @@ void make_gas(ScanState &state) {
     const size_t vertices_size = sizeof(double3) * state.length;
     CUdeviceptr d_vertices = 0;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&d_vertices), vertices_size));
+    timer_.commonGetStartTime(3);
     CUDA_CHECK(cudaMemcpy(
         reinterpret_cast<void *>(d_vertices),
         state.vertices,
         vertices_size,
         cudaMemcpyHostToDevice));
+    timer_.commonGetEndTime(3);
     state.params.points = reinterpret_cast<double3 *>(d_vertices);
 
     // set aabb
@@ -249,7 +220,8 @@ void make_gas(ScanState &state) {
     // We can now free the scratch space buffer used during build and the vertex
     // inputs, since they are not needed by our trivial shading method
     CUDA_CHECK(cudaFree(reinterpret_cast<void *>(d_temp_buffer_gas)));
-    // CUDA_CHECK(cudaFree(reinterpret_cast<void *>(d_vertices)));  // 放到了最后来释放 params.points 的空间
+    // CUDA_CHECK(cudaFree(reinterpret_cast<void *>(d_vertices)));
+    CUDA_CHECK(cudaFree(reinterpret_cast<void *>(d_aabb_ptr)));
 
     size_t compacted_gas_size;
     CUDA_CHECK(cudaMemcpyAsync(&compacted_gas_size, (void *)emitProperty.result, sizeof(size_t), cudaMemcpyDeviceToHost, 0));
@@ -570,22 +542,28 @@ void log_common_info(ScanState &state) {
 }
 
 void get_epsilon(int &epsilon, CODE data_max) {
-    epsilon = (data_max >> 24) << 3; // 2^24: precision of float representing int
-    if (epsilon == 0) {
-        return;
+    // epsilon = (data_max >> 24) << 3; // 2^24: precision of float representing int
+    // if (epsilon == 0) {
+    //     return;
+    // }
+    // CODE and_val = 0;
+    // for (int i = 0; i < 32; i++) {
+    //     and_val = 1 << (31 - i);
+    //     if (epsilon & and_val) {
+    //         break;
+    //     }
+    // }
+    // epsilon = and_val;
+    if (epsilon <= (1 << 23)) {
+        epsilon = 0;
+    } else {
+        epsilon += epsilon / 2;
+        epsilon = data_max >> 23;
     }
-    CODE and_val = 0;
-    for (int i = 0; i < 32; i++) {
-        and_val = 1 << (31 - i);
-        if (epsilon & and_val) {
-            break;
-        }
-    }
-    epsilon = and_val;
 }
 
 void initializeOptix(CODE **raw_data, int length, int density_width, int density_height, 
-                     int column_num, CODE *range, uint32_t cube_width) {
+                     int column_num, CODE *range, int cube_width) {
     fprintf(stdout, "[OptiX]initializeOptix begin...\n");
     state.length = length;
     state.width = density_width;
@@ -605,7 +583,10 @@ void initializeOptix(CODE **raw_data, int length, int density_width, int density
             data_max = state.range[2 * i + 1];
         }
     }
-    if (cube_width == 0) {
+    if (cube_width == -1) { // for 2^6
+        state.params.aabb_width = 1.0 * (data_max - data_min) / state.width;
+        state.params.ray_interval = 1.0 * (data_max - data_min) / state.width;
+    } else if (cube_width == 0) {
         state.params.aabb_width = ((data_max - data_min) - 1) / state.width + 1.0f;
         state.params.ray_interval = ((data_max - data_min) - 1) / state.width + 1.0f;
     } else {
@@ -633,6 +614,7 @@ void initializeOptix(CODE **raw_data, int length, int density_width, int density
     make_sbt(state);
     timer_.commonGetEndTime(0);
     timer_.showTime(0, "initializeOptix");
+    timer_.showTime(3, "transferBasicData");
     fprintf(stdout, "[OptiX]initializeOptix end\n");
 }
 
@@ -648,48 +630,60 @@ void refineWithOptix(BITS *dev_result_bitmap, double *predicate, int column_num,
         predicate[5] - predicate[4]
     };
 
+#if DEBUG_ISHIT_CMP_RAY == 1
     Predicate p = { .x1 = predicate[0], .x2 = predicate[1], 
                     .y1 = predicate[2], .y2 = predicate[3], 
                     .z1 = predicate[4], .z2 = predicate[5] };
     unsigned int point_num_cpu;
     BITS* result_cpu;
-    if (DEBUG_ISHIT_CMP_RAY) {
-        int uint_num = (state.length + 32 - 1) / 32;
-        BITS* host_ptr = (BITS*)malloc(sizeof(BITS) * uint_num);
-        cudaMemcpy(host_ptr, dev_result_bitmap, 4 * uint_num, cudaMemcpyDeviceToHost);
-        point_num_cpu = 0;
-        for (int i = 0; i < state.length; i++) {
-            int pos_in_unsigned_val = 1 << (31 - i);
-            if (host_ptr[i / 32] & pos_in_unsigned_val) {
-                point_num_cpu++;
-            }
+    int uint_num = (state.length + 32 - 1) / 32;
+    BITS* host_ptr = (BITS*)malloc(sizeof(BITS) * uint_num);
+    cudaMemcpy(host_ptr, dev_result_bitmap, 4 * uint_num, cudaMemcpyDeviceToHost);
+    point_num_cpu = 0;
+    for (int i = 0; i < state.length; i++) {
+        int pos_in_unsigned_val = 1 << (31 - i);
+        if (host_ptr[i / 32] & pos_in_unsigned_val) {
+            point_num_cpu++;
         }
-        fprintf(stdout, "[OptiX] initial point num: %u\n", point_num_cpu);
-        free(host_ptr);
-
-        fprintf(stdout, "[OptiX] scan with cpu...\n");
-        result_cpu = (BITS*)malloc(sizeof(BITS) * uint_num);
-        CUDA_CHECK(cudaMemcpy(result_cpu, dev_result_bitmap, sizeof(BITS) * uint_num, cudaMemcpyDeviceToHost));
-        scan_with_cpu(state.vertices, state.length, result_cpu, p, inverse);
-        fprintf(stdout, "[OptiX] scan with cpu end\n");
-        
-        CUDA_CHECK(cudaMemset(state.params.intersection_test_num, 0, sizeof(unsigned)));
-        CUDA_CHECK(cudaMemset(state.params.hit_num, 0, sizeof(unsigned)));
     }
+    fprintf(stdout, "[OptiX] initial point num: %u\n", point_num_cpu);
+    free(host_ptr);
+
+    fprintf(stdout, "[OptiX] scan with cpu...\n");
+    result_cpu = (BITS*)malloc(sizeof(BITS) * uint_num);
+    CUDA_CHECK(cudaMemcpy(result_cpu, dev_result_bitmap, sizeof(BITS) * uint_num, cudaMemcpyDeviceToHost));
+    scan_with_cpu(state.vertices, state.length, result_cpu, p, inverse);
+    fprintf(stdout, "[OptiX] scan with cpu end\n");
+    
+    CUDA_CHECK(cudaMemset(state.params.intersection_test_num, 0, sizeof(unsigned)));
+    CUDA_CHECK(cudaMemset(state.params.hit_num, 0, sizeof(unsigned)));
+#endif
     
     double predicate_range;
     if (direction == 0) {
         predicate_range = prange[0];
         state.launch_width  = (int) (prange[1] / state.params.ray_interval) + 1;
         state.launch_height = (int) (prange[2] / state.params.ray_interval) + 1;
+        if (state.params.ray_interval <= 1.0) { // for data range 2^8|2^6
+            state.launch_width  = (int) (prange[1] / state.params.ray_interval) - 1;
+            state.launch_height = (int) (prange[2] / state.params.ray_interval) - 1;
+        }
     } else if (direction == 1) {
         predicate_range = prange[1];
         state.launch_width  = (int) (prange[0] / state.params.ray_interval) + 1;
         state.launch_height = (int) (prange[2] / state.params.ray_interval) + 1;
+        if (state.params.ray_interval <= 1.0) { // for data range 2^8|2^6
+            state.launch_width  = (int) (prange[0] / state.params.ray_interval) - 1;
+            state.launch_height = (int) (prange[2] / state.params.ray_interval) - 1;
+        }
     } else {
         predicate_range = prange[2];
         state.launch_width  = (int) (prange[0] / state.params.ray_interval) + 1;
         state.launch_height = (int) (prange[1] / state.params.ray_interval) + 1;
+        if (state.params.ray_interval <= 1.0) { // for data range 2^8
+            state.launch_width  = (int) (prange[0] / state.params.ray_interval) - 1;
+            state.launch_height = (int) (prange[1] / state.params.ray_interval) - 1;
+        }
     }
 
     if (ray_length == -1) { // Launch rays based on ray_segment_num
@@ -708,7 +702,7 @@ void refineWithOptix(BITS *dev_result_bitmap, double *predicate, int column_num,
                 state.params.ray_length = state.params.ray_stride - state.params.aabb_width;
                 state.params.ray_space  = state.params.aabb_width;
             }
-        } else if (ray_mode == 2) { // 可直接通过设置 ray_length = 1e-5 实现
+        } else if (ray_mode == 2) {
             // Recalculate ray segment with fixed ray stride
             state.params.ray_length = 1e-5;
             state.params.ray_space  = state.params.aabb_width;
@@ -735,6 +729,9 @@ void refineWithOptix(BITS *dev_result_bitmap, double *predicate, int column_num,
         if (state.depth * state.params.ray_stride < predicate_range) {
             double last_stride = predicate_range - state.depth * state.params.ray_stride;
             state.params.ray_last_length = max(last_stride - state.params.ray_space, 0.0);
+            if (state.params.ray_last_length == 0.0) {
+                state.params.ray_last_length = 1e-5;
+            }
             state.depth++;
         } else {
             state.params.ray_last_length = state.params.ray_length;

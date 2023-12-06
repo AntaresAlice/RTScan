@@ -15,10 +15,6 @@ static __forceinline__ __device__ void computeRay( uint3 idx, float3& origin, fl
             float(params.predicate[2] + (idx.x + 0.5) * params.ray_interval),
             float(params.predicate[4] + (idx.y + 0.5) * params.ray_interval)
         };
-        // if (params.ray_interval == 1.0) {
-        //     origin.y -= 0.5 * params.ray_interval;
-        //     origin.z -= 0.5 * params.ray_interval;
-        // }
         direction = {1.0f, 0.0f, 0.0f};
     } else if (params.direction == 1) { // y
         origin = {
@@ -26,10 +22,6 @@ static __forceinline__ __device__ void computeRay( uint3 idx, float3& origin, fl
             float((params.predicate[2] + 0.5 * params.ray_space) + idx.z * params.ray_stride),
             float(params.predicate[4] + (idx.y + 0.5) * params.ray_interval),
         };
-        // if (params.ray_interval == 1.0) {
-        //     origin.x -= 0.5 * params.ray_interval;
-        //     origin.z -= 0.5 * params.ray_interval;
-        // }
         direction = {0.0f, 1.0f, 0.0f};
     } else { // z
         origin = {
@@ -37,10 +29,31 @@ static __forceinline__ __device__ void computeRay( uint3 idx, float3& origin, fl
             float(params.predicate[2] + (idx.y + 0.5) * params.ray_interval),
             float((params.predicate[4] + 0.5 * params.ray_space) + idx.z * params.ray_stride)
         };
-        // if (params.ray_interval == 1.0) {
-        //     origin.x -= 0.5 * params.ray_interval;
-        //     origin.y -= 0.5 * params.ray_interval;
-        // }
+        direction = {0.0f, 0.0f, 1.0f};
+    }
+}
+
+static __forceinline__ __device__ void computeRay_ray_interval_1( uint3 idx, float3& origin, float3& direction ) {
+    if (params.direction == 0) { // x
+        origin = {
+            float((params.predicate[0] + params.ray_space) + idx.z * params.ray_stride),
+            float(params.predicate[2] + (idx.x + 1) * params.ray_interval),
+            float(params.predicate[4] + (idx.y + 1) * params.ray_interval)
+        };
+        direction = {1.0f, 0.0f, 0.0f};
+    } else if (params.direction == 1) { // y
+        origin = {
+            float(params.predicate[0] + (idx.x + 1) * params.ray_interval),
+            float((params.predicate[2] + params.ray_space) + idx.z * params.ray_stride),
+            float(params.predicate[4] + (idx.y + 1) * params.ray_interval),
+        };
+        direction = {0.0f, 1.0f, 0.0f};
+    } else { // z
+        origin = {
+            float(params.predicate[0] + (idx.x + 1) * params.ray_interval),
+            float(params.predicate[2] + (idx.y + 1) * params.ray_interval),
+            float((params.predicate[4] + params.ray_space) + idx.z * params.ray_stride)
+        };
         direction = {0.0f, 0.0f, 1.0f};
     }
 }
@@ -67,7 +80,11 @@ extern "C" __global__ void __raygen__rg() {
     // Map our launch idx to a screen location and create a ray from the camera
     // location through the screen 
     float3 ray_origin, ray_direction;
+#if SMALL_DATA_RANGE == 1
+    computeRay_ray_interval_1( idx, ray_origin, ray_direction );
+#else
     computeRay( idx, ray_origin, ray_direction );
+#endif
 
     // Trace the ray against our scene hierarchy
     unsigned int intersection_test_num = 0;
@@ -91,11 +108,11 @@ extern "C" __global__ void __raygen__rg() {
             intersection_test_num,
             hit_num
             );
+#if DEBUG_ISHIT_CMP_RAY == 1
     atomicAdd(params.intersection_test_num, intersection_test_num);
     atomicAdd(params.hit_num, hit_num);
-    if (DEBUG_ISHIT_CMP_RAY) {
-        params.ray_primitive_hits[dim.x * dim.y * idx.z + dim.x * idx.y + idx.x] = hit_num;
-    }
+    params.ray_primitive_hits[dim.x * dim.y * idx.z + dim.x * idx.y + idx.x] = hit_num;
+#endif
 }
 
 extern "C" __global__ void __miss__ms() {
@@ -105,18 +122,16 @@ extern "C" __global__ void __intersection__cube() {
     unsigned int primIdx = optixGetPrimitiveIndex();
     double3 point = params.points[primIdx];
 
-    unsigned int intersection_test_num = optixGetPayload_0();
-    optixSetPayload_0(intersection_test_num + 1); // number of intersection test
+#if DEBUG_ISHIT_CMP_RAY == 1
+    optixSetPayload_0(optixGetPayload_0() + 1); // number of intersection test
+#endif
     if (point.x > params.predicate[0] && point.x < params.predicate[1] &&
         point.y > params.predicate[2] && point.y < params.predicate[3] && 
         point.z > params.predicate[4] && point.z < params.predicate[5] ) {
-        // const uint3 idx = optixGetLaunchIndex();
-        // printf("\033[36m__intersection__cube: points[%d] = {%f, %f, %f}, ray: [%d, %d]\033[0m\n", 
-        //         primIdx, point.x, point.y, point.z,
-        //         idx.x, idx.y);
-
         set_result(params.result, primIdx);
+#if DEBUG_ISHIT_CMP_RAY == 1
         optixSetPayload_1(optixGetPayload_1() + 1);
+#endif
     }
 }
 

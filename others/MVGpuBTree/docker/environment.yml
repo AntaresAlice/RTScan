@@ -1,0 +1,7 @@
+name: mvgpubtree
+channels:
+  - conda-forge
+dependencies:
+  - matplotlib
+  - pandas
+  - scipy

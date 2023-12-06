@@ -430,6 +430,10 @@ endfunction()
 # Just make sure you rename all the occurances of the sample's name in the C code as well
 # and the CMakeLists.txt file.
 add_subdirectory( optixScan              )
+add_subdirectory( rtscan_2c              )
+add_subdirectory( rtscan_interval_spacing)
+add_subdirectory( rtc3                   )
+add_subdirectory( rtc1                   )
 
 # Our sutil library.  The rules to build it are found in the subdirectory.
 add_subdirectory(sutil)

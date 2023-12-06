@@ -1,0 +1,21 @@
+bt 19940101 19950101
+bt 5 9
+lt 24
+exit
+q6_withoutEncode
+
+lt 19940101
+lt 5
+lt 24
+lt 19950101
+lt 9
+lt 24
+exit
+
+lt 19940101
+lt 6
+lt 24
+exit
+19950101
+8
+q6_withoutEncode

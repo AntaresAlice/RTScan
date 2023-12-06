@@ -7,6 +7,9 @@
 #ifndef DEBUG_INFO
 #define DEBUG_INFO 0 // info about ray
 #endif
+#ifndef SMALL_DATA_RANGE
+#define SMALL_DATA_RANGE 0 // 2^6
+#endif
 struct Params
 {
     double3*                points;    

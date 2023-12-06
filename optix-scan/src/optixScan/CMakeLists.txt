@@ -30,6 +30,7 @@ set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/aabb.cu PROPERTIES CUDA_
 
 add_definitions(-DDEBUG_ISHIT_CMP_RAY=${DEBUG_ISHIT_CMP_RAY})
 add_definitions(-DDEBUG_INFO=${DEBUG_INFO})
+add_definitions(-DSMALL_DATA_RANGE=${SMALL_DATA_RANGE})
 
 OPTIX_add_sample_executable( optixScan target_name
   optixScan.cpp
@@ -38,7 +39,7 @@ OPTIX_add_sample_executable( optixScan target_name
   optixScan.h
   state.h
   timer.h
-  # OPTIONS -rdc true # 刚才编译不成功是这个命令的问题
+  # OPTIONS -rdc true
   )
 
 target_link_libraries( ${target_name}

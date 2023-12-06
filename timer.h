@@ -71,33 +71,45 @@ class Timer{
   void showTime() {
     cout << endl;
     cout << "###########   Time  ##########" << endl;
-    cout << "[Time] build bindex: ";
-    cout << time[0] << " ms" << endl;
-    cout << "[Time] encode data: ";
-    cout << time[1] << " ms" << endl;
-    cout << "[Time] GPU bits and: ";
-    cout << fixed << time[2] << endl;
-    cout << "[Time] GPU bits copy: ";
-    cout << fixed << time[3] << endl;
+    cout << "[Time] query to ray (ray building): ";
+    cout << time[23] << " ms" << endl;
+    
+    // cout << "[Time] encode data: ";
+    // cout << time[1] << " ms" << endl;
+    // cout << "[Time] GPU bits and: ";
+    // cout << time[2] << endl;
+    // cout << "[Time] GPU bits copy: ";
+    // cout << time[3] << endl;
     cout << "[Time] data sieving: ";
     cout << time[4] << " ms" << endl;
-    cout << "[Time] first merge: "; // 将 3 个 draft vector 合并
+    cout << "[Time] merge: "; // merge 3 sieving bit vectors
     cout << time[15] << " ms" << endl;
     cout << "[Time] refine: ";
     cout << time[13] << " ms" << endl;    
-    cout << "[Time] predicate malloc: ";
-    cout << time[18] << " ms" << endl;
-    cout << "[Time] encode query: ";
-    cout << time[16] << " ms" << endl;
-    cout << "[Time] final merge: ";
-    cout << time[14] << " ms" << endl;
-    cout << "[Time] multi scan: ";
+    // cout << "[Time] predicate malloc: ";
+    // cout << time[18] << " ms" << endl;
+    cout << "[Time] total scan: ";
     cout << time[11] << " ms" << endl;
     cout << "[Time] transfer result back to memory: ";
     cout << time[12] << " ms" << endl;
+    cout << "[Time] total time: " << time[11] + time[12] << " ms" << endl;
     // add new time counter here
     cout << "##############################" << endl;
     cout << endl;
   }
 
+  void showMajorTime() {
+    cout << "###########   Major Time  ##########" << endl;
+    cout << "[Time] uniform encoding: ";
+    cout << time[20] << " ms" << endl;
+    cout << "[Time] build sieve bit vector: ";
+    cout << time[21] << " ms" << endl;
+    cout << "[Time] initialize RT: ";
+    cout << time[22] << " ms" << endl;
+    cout << "[Time] encode query: ";
+    cout << time[16] << " ms" << endl;
+    cout << "[Time] transfer sieve bit vector: ";
+    cout << time[24] << " ms" << endl;
+    cout << "####################################" << endl;
+  }
 };

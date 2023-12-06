@@ -1,7 +1,228 @@
-#include "bindex.h"
+#include <assert.h>
+#include <immintrin.h>
+#include <limits.h>
+#include <omp.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
+#include <algorithm>
+#include <iostream>
+#include <parallel/algorithm>
+#include <random>
+#include <sstream>
+#include <string>
+#include <thread>
+
+
+#include <iostream>
+#include <vector>
+#include <regex>
+#include <fstream>
+
+
+#define THREAD_NUM 20
+#define MAX_BINDEX_NUM 256
+
+#if !defined(WIDTH_4) && !defined(WIDTH_8) && !defined(WIDTH_12) && !defined(WIDTH_16) && !defined(WIDTH_20) && \
+    !defined(WIDTH_24) && !defined(WIDTH_28) && !defined(WIDTH_32)
+#define WIDTH_32
+#endif
+
+#ifndef VAREA_N
+#define VAREA_N 128   // 128
+#endif
+
+#ifndef DATA_N
+#define DATA_N  1e8   //  1e9
+#endif
+
+
+#define ROUNDUP_DIVIDE(x, n) ((x + n - 1) / n)
+#define ROUNDUP(x, n) (ROUNDUP_DIVIDE(x, n) * n)
+#define PRINT_EXCECUTION_TIME(msg, code)           \
+  do {                                             \
+    struct timeval t1, t2;                         \
+    double elapsed;                                \
+    gettimeofday(&t1, NULL);                       \
+    do {                                           \
+      code;                                        \
+    } while (0);                                   \
+    gettimeofday(&t2, NULL);                       \
+    elapsed = (t2.tv_sec - t1.tv_sec) * 1000.0;    \
+    elapsed += (t2.tv_usec - t1.tv_usec) / 1000.0; \
+    printf(msg " time: %f ms\n", elapsed);         \
+  } while (0);
+
+#define BATCH_BLOCK_INSERT 0
+
+/*
+  optional code width
+*/
+#ifdef WIDTH_4
+typedef uint8_t CODE;
+#define MAXCODE ((1 << 4) - 1)
+#define MINCODE 0
+#define CODEWIDTH 4
+#define LOADSHIFT 4
+#endif
+
+#ifdef WIDTH_8
+typedef uint8_t CODE;
+#define MAXCODE ((1 << 8) - 1)
+#define MINCODE 0
+#define CODEWIDTH 8
+#define LOADSHIFT 0
+#endif
+
+#ifdef WIDTH_12
+typedef uint16_t CODE;
+#define MAXCODE ((1 << 12) - 1)
+#define MINCODE 0
+#define CODEWIDTH 12
+#define LOADSHIFT 4
+#endif
+
+#ifdef WIDTH_16
+typedef uint16_t CODE;
+#define MAXCODE ((1 << 16) - 1)
+#define MINCODE 0
+#define CODEWIDTH 16
+#define LOADSHIFT 0
+#endif
+
+#ifdef WIDTH_20
+typedef uint32_t CODE;
+#define MAXCODE ((1 << 20) - 1)
+#define MINCODE 0
+#define CODEWIDTH 20
+#define LOADSHIFT 12
+#endif
+
+#ifdef WIDTH_24
+typedef uint32_t CODE;
+#define MAXCODE ((1 << 24) - 1)
+#define MINCODE 0
+#define CODEWIDTH 24
+#define LOADSHIFT 8
+#endif
+
+#ifdef WIDTH_28
+typedef uint32_t CODE;
+#define MAXCODE ((1 << 28) - 1)
+#define MINCODE 0
+#define CODEWIDTH 28
+#define LOADSHIFT 4
+#endif
+
+#ifdef WIDTH_32
+typedef uint32_t CODE;
+#define MAXCODE ((1L << 32) - 1)
+#define MINCODE 0
+#define CODEWIDTH 32
+#define LOADSHIFT 0
+#endif
+
+
+#define DEBUG_TIME_COUNT 1
+#include <mutex>
+
+using namespace std;
+
+// time count part
+class Timer{
+  public:
+
+  double time[30];
+  mutex timeMutex[30];
+  double timebase;
+
+  Timer() {
+    for (int i = 0; i < 30; i++) {
+      time[i] = 0.0;
+    }
+    struct timeval t1;                           
+    gettimeofday(&t1, NULL);
+    timebase = t1.tv_sec * 1000.0 + t1.tv_usec / 1000.0;
+  }
+
+  void clear() {
+    for (int i = 0; i < 30; i++) {
+      time[i] = 0.0;
+    }
+  }
+  
+  void showTime() {
+    cout << endl;
+    cout << "###########   Time  ##########" << endl;
+    cout << "[Time] build bindex: ";
+    cout << time[0] << " ms" << endl;
+    // cout << "[Time] append to bindex: ";
+    // cout << time[1] << endl;
+    // cout << "[Time] insert to block: ";
+    // cout << time[2] << endl;
+    // cout << "[Time] split block: ";
+    // cout << time[3] << endl;
+    // cout << "[Time] insert to area: ";
+    // cout << time[4] << endl;
+    // cout << "[Time] init new space: ";
+    // cout << time[5] << endl;
+    // cout << "[Time] append to filter vector: ";
+    // cout << time[6] << endl;
+    cout << "[Time] total time: ";
+    cout << time[11] << " ms" << endl;
+    cout << "##############################" << endl;
+    cout << endl;
+  }
+
+
+  void commonGetStartTime(int timeId) {
+    struct timeval t1;                           
+    gettimeofday(&t1, NULL);
+    lock_guard<mutex> lock(timeMutex[timeId]);
+    time[timeId] -= (t1.tv_sec * 1000.0 + t1.tv_usec / 1000.0) - timebase;
+  }
+
+  void commonGetEndTime(int timeId) {
+    struct timeval t1;                           
+    gettimeofday(&t1, NULL);
+    lock_guard<mutex> lock(timeMutex[timeId]);
+    time[timeId] += (t1.tv_sec * 1000.0 + t1.tv_usec / 1000.0) - timebase;
+  }
+};
 
 Timer timer;
 
+typedef int POSTYPE;  // Data type for positions
+// typedef int CODE;           // Codes are stored as int
+typedef unsigned int BITS;  // 32 0-1 bit results are stored in a BITS
+enum OPERATOR {
+  EQ = 0,  // x == a
+  LT,      // x < a
+  GT,      // x > a
+  LE,      // x <= a
+  GE,      // x >= a
+  BT,      // a < x < b
+};
+
+const int RUNS = 1;
+
+// const int CODEWIDTH = sizeof(CODE) * 8;
+const int BITSWIDTH = sizeof(BITS) * 8;
+const int BITSSHIFT = 5;  // x / BITSWIDTH == x >> BITSSHIFT
+const int SIMD_ALIGEN = 32;
+const int SIMD_JOB_UNIT = 8;  // 8 * BITSWIDTH == __m256i
+
+const int blockInitSize = 3276;  // 2048  
+const int blockMaxSize = 4096; // blockInitSize * 2;
+const int K = VAREA_N;  // Number of virtual areas
+const int N = (int)DATA_N;
+// const int MAXCODE = INT_MAX;
+// const int MINCODE = INT_MIN;
+const int blockNumMax = (N / (K * blockInitSize)) * 4;
 int prefetch_stride = 6;
 
 std::vector<CODE> target_numbers_l;  // left target numbers
@@ -11,37 +232,8 @@ BITS *result1;
 BITS *result2;
 
 CODE *current_raw_data;
-std::mutex bitmapMutex;
+char scan_file[256];
 
-std::mutex scan_refine_mutex;
-int scan_refine_in_position;
-CODE scan_selected_compares[MAX_BINDEX_NUM][2];
-bool scan_skip_refine;
-// bool scan_use_special_compare;
-bool scan_skip_other_face[MAX_BINDEX_NUM];
-bool scan_skip_this_face[MAX_BINDEX_NUM];
-CODE scan_max_compares[MAX_BINDEX_NUM][2];
-bool scan_inverse_this_face[MAX_BINDEX_NUM];
-
-int density_width;
-int density_height;
-
-int default_ray_segment_num;
-
-int default_ray_length = 48000000;
-int default_ray_mode = 1; // 0 for continuous ray, 1 for ray with space, 2 for ray as point
-
-CODE min_val = UINT32_MAX;
-CODE max_val = 0;
-
-int NUM_QUERIES;
-int RANGE_QUERY = 1;
-int REDUCED_SCANNING = 0;
-uint32_t data_range_list[3] = {UINT32_MAX, UINT32_MAX, UINT32_MAX};
-uint32_t cube_width = 0;
-bool READ_QUERIES_FROM_FILE = true;
-int face_direction = 1; // 0: launch rays from wide face, 1: narrow face
-bool with_refine = true;
 
 std::vector<std::string> stringSplit(const std::string& str, char delim) {
     std::string s;
@@ -64,6 +256,10 @@ POSTYPE *argsort(const T *v, POSTYPE n) {
   return idx;
 }
 
+inline int bits_num_needed(int n) {
+  // calculate the number of bits for storing n 0-1 bit results
+  return ((n - 1) / BITSWIDTH) + 1;
+}
 
 BITS gen_less_bits(const CODE *val, CODE compare, int n) {
   // n must <= BITSWIDTH (32)
@@ -76,6 +272,30 @@ BITS gen_less_bits(const CODE *val, CODE compare, int n) {
   return result;
 }
 
+typedef struct {
+  // Struct for a position block
+  POSTYPE *pos;  // Position array in a block
+  CODE *val;     // Sorted codes in a block TODO: needed to be
+  // removed in future implementation for saving
+  // space (emmmm... actually we don't need
+  // to remove it for experimental evaluations).
+  int length;
+} pos_block;
+
+typedef struct {
+  pos_block *blocks[blockNumMax];
+  int blockNum;
+  int length;
+} Area;
+
+
+
+typedef struct {
+  Area *areas[K];
+  BITS *filterVectors[K - 1];
+  POSTYPE area_counts[K];  // Counts of values contained in the first i areas
+  POSTYPE length;
+} BinDex;
 
 void init_pos_block(pos_block *pb, CODE *val_f, POSTYPE *pos_f, int n) {
   assert(n <= blockInitSize);
@@ -177,6 +397,10 @@ int insert_to_block_without_val(pos_block *pb, CODE *val_f, POSTYPE *pos_f, int 
         }
       }
     }
+
+
+
+
   pb->length = length_new;
 
   if (DEBUG_TIME_COUNT) timer.commonGetEndTime(2);
@@ -372,28 +596,19 @@ inline POSTYPE num_insert_to_area(POSTYPE *areaStartIdx, int k, int n) {
 }
 
 CODE *data_sorted;
-void init_bindex(BinDex *bindex, CODE *data, POSTYPE n, CODE *raw_data) {
+void init_bindex(BinDex *bindex, CODE *data, POSTYPE n) {
   bindex->length = n;
   POSTYPE avgAreaSize = n / K;
 
   CODE areaStartValues[K];
   POSTYPE areaStartIdx[K];
 
-  // CODE *data_sorted = (CODE *)malloc(n * sizeof(CODE));  // Sorted codes
   data_sorted = (CODE *)malloc(n * sizeof(CODE));  // Sorted codes
-  // Store raw data in bindex
-  // Allocate 2 times of needed space, preparing for future appending
-  // CODE *bindex_raw_data = (CODE *)malloc(2 * n * sizeof(CODE));
-  // raw_data = bindex_raw_data;
-
 
   POSTYPE *pos = argsort(data, n);
   for (int i = 0; i < n; i++) {
     data_sorted[i] = data[pos[i]];
-    raw_data[i] = data[i];
   }
-
-  bindex->data_max = data_sorted[bindex->length - 1];
 
   areaStartValues[0] = data_sorted[0];
   areaStartIdx[0] = 0;
@@ -443,99 +658,11 @@ void init_bindex(BinDex *bindex, CODE *data, POSTYPE n, CODE *raw_data) {
       // Malloc 2 times of space, prepared for future appending
       bindex->filterVectors[k * THREAD_NUM + j] =
           (BITS *)aligned_alloc(SIMD_ALIGEN, 2 * bits_num_needed(n) * sizeof(BITS));
-      threads[j] = std::thread(set_fv_val_less, bindex->filterVectors[k * THREAD_NUM + j], raw_data,
+      threads[j] = std::thread(set_fv_val_less, bindex->filterVectors[k * THREAD_NUM + j], data,
                                area_start_value(bindex->areas[k * THREAD_NUM + j + 1]), n);
     }
     for (int j = 0; j < THREAD_NUM && (k * THREAD_NUM + j) < (K - 1); j++) {
       threads[j].join();
-    }
-  }
-
-  free(pos);
-  free(data_sorted);
-}
-
-
-void init_bindex_in_GPU(BinDex *bindex, CODE *data, POSTYPE n, CODE *raw_data, int bindex_id) {
-  bindex->length = n;
-  POSTYPE avgAreaSize = n / K;
-  cudaError_t cudaStatus;
-
-  // CODE areaStartValues[K];
-  POSTYPE areaStartIdx[K];
-
-  // CODE *data_sorted = (CODE *)malloc(n * sizeof(CODE));  // Sorted codes
-  data_sorted = (CODE *)malloc(n * sizeof(CODE));  // Sorted codes
-  // Store raw data in bindex
-  // Allocate 2 times of needed space, preparing for future appending
-  // CODE *bindex_raw_data = (CODE *)malloc(2 * n * sizeof(CODE));
-  // raw_data = bindex_raw_data;
-
-
-  POSTYPE *pos = argsort(data, n);
-  for (int i = 0; i < n; i++) {
-    data_sorted[i] = data[pos[i]];
-    raw_data[i] = data[i];
-  }
-
-  bindex->data_min = data_sorted[0];
-  bindex->data_max = data_sorted[bindex->length - 1];
-
-  printf("Bindex data min: %u  max: %u\n", bindex->data_min, bindex->data_max);
-
-  bindex->areaStartValues[0] = data_sorted[0];
-  areaStartIdx[0] = 0;
-
-  for (int i = 1; i < K; i++) {
-    bindex->areaStartValues[i] = data_sorted[i * avgAreaSize];
-    int j = i * avgAreaSize;
-    // if (bindex->areaStartValues[i] == bindex->areaStartValues[i - 1]) {
-    if (ifEncodeEqual(bindex->areaStartValues[i], bindex->areaStartValues[i - 1], bindex_id)) {
-      areaStartIdx[i] = j;
-    } else {
-      // To find the first element which is less than startValue
-      // TODO: in current implementation, an area must contain at least two
-      // different values, area containing unique code should be considered in
-      // future implementation
-      // while (data_sorted[j] == bindex->areaStartValues[i]) {
-      while (ifEncodeEqual(data_sorted[j], bindex->areaStartValues[i], bindex_id)) {
-        j--;
-      }
-      areaStartIdx[i] = j + 1;
-      bindex->areaStartValues[i] = data_sorted[j + 1];
-    }
-    // if(DEBUG_INFO) printf("area[%u] = %u\n", i, bindex->areaStartValues[i]);
-  }
-  
-  std::thread threads[THREAD_NUM];
-
-  // Build the filterVectors
-  // Now we build them in CPU memory and then copy them to GPU memory
-  // TODO: build them in GPU memory using CUDA to accelerate.
-  for (int k = 0; k * THREAD_NUM < K - 1; k++) {
-    for (int j = 0; j < THREAD_NUM && (k * THREAD_NUM + j) < (K - 1); j++) {
-      // Malloc 2 times of space, prepared for future appending
-      bindex->filterVectors[k * THREAD_NUM + j] =
-          (BITS *)aligned_alloc(SIMD_ALIGEN, bits_num_needed(n) * sizeof(BITS));
-      threads[j] = std::thread(set_fv_val_less, bindex->filterVectors[k * THREAD_NUM + j], raw_data,
-                               bindex->areaStartValues[k * THREAD_NUM + j + 1], n);
-    }
-    for (int j = 0; j < THREAD_NUM && (k * THREAD_NUM + j) < (K - 1); j++) {
-      threads[j].join();
-    }
-  }
-
-  for (int i = 0; i < K - 1; i++) {
-    cudaStatus = cudaMalloc((void**)&(bindex->filterVectorsInGPU[i]), bits_num_needed(n) * sizeof(BITS));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        exit(-1);
-    }
-
-    cudaStatus = cudaMemcpy(bindex->filterVectorsInGPU[i], bindex->filterVectors[i], bits_num_needed(n) * sizeof(BITS), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        exit(-1);
     }
   }
 
@@ -836,26 +963,6 @@ void copy_filter_vector(BinDex *bindex, BITS *result, int k) {
   }
 }
 
-
-void copy_filter_vector_in_GPU(BinDex *bindex, BITS *dev_bitmap, int k, bool negation) {
-  int bitmap_len = bits_num_needed(bindex->length);
-
-  if (k < 0) {
-    cudaMemset(dev_bitmap, 0, bitmap_len * sizeof(BITS));
-    return;
-  }
-
-  if (k >= (K - 1)) {
-    cudaMemset(dev_bitmap, 0xFF, bitmap_len * sizeof(BITS));
-    return;
-  }
-
-  if (!negation)
-    GPUbitCopyWithCuda(dev_bitmap, bindex->filterVectorsInGPU[k], bitmap_len);
-  else
-    GPUbitCopyNegationWithCuda(dev_bitmap, bindex->filterVectorsInGPU[k], bitmap_len);
-}
-
 void copy_filter_vector_not(BinDex *bindex, BITS *result, int k) {
   std::thread threads[THREAD_NUM];
   int bitmap_len = bits_num_needed(bindex->length);
@@ -943,54 +1050,6 @@ void copy_filter_vector_bt(BinDex *bindex, BITS *result, int kl, int kr) {
 
   // for (int i = 0; i < THREAD_NUM; i++) {
   //   threads[i].join();
-  // }
-}
-
-void copy_filter_vector_bt_in_GPU(BinDex *bindex, BITS *result, int kl, int kr) {
-  int bitmap_len = bits_num_needed(bindex->length);
-
-  // TODO: finish this
-  if (kr < 0) {
-    // assert(0);
-    // printf("1\n");
-    // memset_mt(result, 0, bitmap_len);
-    cudaMemset(result, 0, bitmap_len * sizeof(BITS));
-    return;
-  } else if (kr >= (K - 1)) {
-    // assert(0);
-    // printf("2\n");
-    // copy_filter_vector_not(bindex, result, kl);
-    copy_filter_vector_in_GPU(bindex, result, kl, true);
-    return;
-  }
-  if (kl < 0) {
-    // assert(0);
-    // printf("3\n");
-    // copy_filter_vector(bindex, result, kr);
-    copy_filter_vector_in_GPU(bindex, result, kr);
-    return;
-  } else if (kl >= (K - 1)) {
-    // assert(0);
-    // printf("4\n");
-    // memset_mt(result, 0, bitmap_len);  // Slower(?) than a loop
-    cudaMemset(result, 0, bitmap_len * sizeof(BITS));
-    return;
-  }
-
-  GPUbitCopySIMDWithCuda(result, 
-                         bindex->filterVectorsInGPU[kl], 
-                         bindex->filterVectorsInGPU[kr],
-                         bitmap_len);
-
-  // simd copy_bt
-  // int mt_bitmap_n = (bitmap_len / SIMD_JOB_UNIT) * SIMD_JOB_UNIT;  // must be SIMD_JOB_UNIT aligened
-  // for (int i = 0; i < THREAD_NUM; i++)
-  //   threads[i] =
-  //       std::thread(copy_bitmap_bt_simd, result, bindex->filterVectors[kl], bindex->filterVectors[kr], mt_bitmap_n, i);
-  // for (int i = 0; i < THREAD_NUM; i++) threads[i].join();
-  // for (int i = 0; i < bitmap_len - mt_bitmap_n; i++) {
-  //   (result + mt_bitmap_n)[i] =
-  //       (~((bindex->filterVectors[kl] + mt_bitmap_n)[i])) & ((bindex->filterVectors[kr] + mt_bitmap_n)[i]);
   // }
 }
 
@@ -1207,21 +1266,17 @@ void refine_result_bitmap(BITS *bitmap_a, BITS *bitmap_b, int start_idx, int end
   }
   // int prefetch_stride = 6;
   int i;
-  for (i = start_idx; i < end_idx; i++) {
+  for (i = start_idx; i + prefetch_stride < end_idx; i++) {
+    /* if(prefetch_stride) {
+      __builtin_prefetch(&bitmap_a[*(pos_list + i + prefetch_stride) >> BITSSHIFT], 1, 1);
+    } */
     __sync_fetch_and_and(&bitmap_a[i], bitmap_b[i]);
   }
-  // for (i = start_idx; i + prefetch_stride < end_idx; i++) {
-  //   /* if(prefetch_stride) {
-  //     __builtin_prefetch(&bitmap_a[*(pos_list + i + prefetch_stride) >> BITSSHIFT], 1, 1);
-  //   } */
-  //   __sync_fetch_and_and(&bitmap_a[i], bitmap_b[i]);
-  //   printf("\r%d",i);
-  // }
 
-  // while (i < end_idx) {
-  //   __sync_fetch_and_and(&bitmap_a[i], bitmap_b[i]);
-  //   i++;
-  // }
+  while (i < end_idx) {
+    __sync_fetch_and_and(&bitmap_a[i], bitmap_b[i]);
+    i++;
+  }
 
 }
 
@@ -1307,141 +1362,6 @@ void refine_positions_in_blks_mt(BITS *bitmap, Area *area, int start_blk_idx,
   }
 }
 
-int find_appropriate_fv(BinDex *bindex, CODE compare) {
-  // TODO: could return -1?
-  // Return the last area whose startValue is less than 'compare'
-  // Obviously here a naive linear search is enough
-  // Return -1 if 'compare' less than the first value in the virtual space
-  // TODO: outdated comments, bad code, but worked
-  if (compare < bindex->areaStartValues[0]) return -1;
-  for (int i = 0; i < K; i++) {
-    CODE area_sv = bindex->areaStartValues[i];
-    if (area_sv == compare) return i;
-    if (area_sv > compare) return i - 1;
-  }
-  // check if actually out of boundary here.
-  // if so, return K
-  // need extra check before use the return value avoid of error.
-  if (compare <= bindex->data_max)
-    return K - 1;
-  else
-    return K;
-}
-
-void bindex_scan_lt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int bindex_id) {
-  int bitmap_len = bits_num_needed(bindex->length);
-  int area_idx = find_appropriate_fv(bindex, compare);
-
-
-  // set common compare here for use in refine
-  scan_max_compares[bindex_id][0] = bindex->data_min;
-  scan_max_compares[bindex_id][1] = compare;
-
-  // handle some boundary problems: <0, ==0, K-1, >K-1
-  // <0: set all bits to 0. should not call rt. interrupt other procedures now. should cancel merge as well?
-  // ==0: set all bits to 0. just scan one face: SC[this bindex] x MC[other bindexs].
-  // K-1: area_idx = K - 1 may not cause problem now?
-  // K: set all bits to 1. skip this face: SC[this bindex] x MC[other bindexs]
-
-  if (area_idx < 0) {
-    // 'compare' less than all raw_data, return all zero result
-
-    // set skip to true so refine thread will be informed to skip
-    scan_refine_mutex.lock();
-    scan_skip_refine = true;
-    scan_refine_mutex.unlock();
-
-    // TODO: don't memset here to avoid duplicated memset
-    // cudaMemset(dev_bitmap, 0, bitmap_len);
-    return;
-  }
-
-  if (area_idx == 0) {
-    // 'compare' less than all raw_data, return all zero result
-    scan_refine_mutex.lock();
-    if(!scan_skip_refine) {
-      scan_skip_other_face[bindex_id] = true;
-      scan_selected_compares[bindex_id][0] = bindex->data_min;
-      scan_selected_compares[bindex_id][1] = compare;
-      // printf("comapre[%d]: %u %u\n", bindex_id, scan_selected_compares[bindex_id][0], scan_selected_compares[bindex_id][1]);
-      scan_refine_in_position += 1;
-    }
-    scan_refine_mutex.unlock();
-    
-    // TODO: don't memset here to avoid duplicated memset
-    // if(!scan_skip_refine) cudaMemset(dev_bitmap, 0, bitmap_len);
-    return;
-  }
-
-  if (area_idx > K - 1) {
-    // set skip this bindex so rt will skip the scan for this face
-    scan_refine_mutex.lock();
-    if(!scan_skip_refine) {
-      scan_skip_this_face[bindex_id] = true;
-      scan_selected_compares[bindex_id][0] = bindex->data_min;
-      scan_selected_compares[bindex_id][1] = compare;
-      scan_refine_in_position += 1;
-    }
-    scan_refine_mutex.unlock();
-    // TODO: don't memset here to avoid duplicated memset
-    // if(!scan_skip_refine) cudaMemset(dev_bitmap, 0xFF, bitmap_len);
-    return;
-  }
-
-  // choose use inverse or normal
-  // TODO: a simple data compare here for uniform data, change this to data number compare in the future
-  bool inverse = false;
-  // TODO: if area_idx + 1 == K, inverse should use 0xff as selected filter vector and data_max as max, this boundary problem should be handled above
-  if (area_idx < K - 1) {
-    if (compare - bindex->areaStartValues[area_idx] > bindex->areaStartValues[area_idx + 1] - compare) {
-      inverse = true;
-      scan_inverse_this_face[bindex_id] = true;
-    }
-  }
-  printf("bindex->areaStartValues[%d]=%u\n", area_idx, bindex->areaStartValues[area_idx]);
-
-  // set refine compares here
-  // scan_refine_mutex.lock();
-  scan_refine_mutex.lock();
-  if (inverse) {
-    scan_selected_compares[bindex_id][0] = compare;
-    scan_selected_compares[bindex_id][1] = bindex->areaStartValues[area_idx + 1];  // TODO: must notice that this upper boundary cannot be reached, be careful in refine
-  } else {
-    scan_selected_compares[bindex_id][0] = bindex->areaStartValues[area_idx];
-    scan_selected_compares[bindex_id][1] = compare;
-  }
-
-  // if compares[0] == compares[1], means that the filter can meet the query by itself, and we don't need refine, either.
-  // but we don't use the code below because we still need filters, so copy and merge filter is necessary.
-  // we will add the code below to refine with GPU and skip there
-  // if (scan_selected_compares[bindex_id][0] == scan_selected_compares[bindex_id][1]) {
-  //   if(!scan_skip_refine) {
-  //     scan_skip_this_face[bindex_id] = true;
-  //     scan_selected_compares[bindex_id][0] = bindex->data_min;
-  //     scan_selected_compares[bindex_id][1] = compare;
-  //     scan_refine_in_position += 1;
-  //   }
-  //   scan_refine_mutex.unlock();
-  //   return;
-  // }
-  if(DEBUG_INFO) printf("area [%d]\n", area_idx);
-  if(DEBUG_INFO) printf("comapre[%d]: %u %u\n", bindex_id, scan_selected_compares[bindex_id][0], scan_selected_compares[bindex_id][1]);
-  scan_refine_in_position += 1;
-  scan_refine_mutex.unlock();
-
-  // we use the one small than compare here, so rt must return result to append (maybe with and)
-  if(!scan_skip_refine) {
-    if (inverse) {
-      PRINT_EXCECUTION_TIME("copy",
-                            copy_filter_vector_in_GPU(bindex, dev_bitmap, area_idx))
-    }
-    else {
-      PRINT_EXCECUTION_TIME("copy",
-                            copy_filter_vector_in_GPU(bindex, dev_bitmap, area_idx - 1))
-    }
-  }
-}
-
 void bindex_scan_lt(BinDex *bindex, BITS *result, CODE compare) {
   std::thread threads[THREAD_NUM];
   int bitmap_len = bits_num_needed(bindex->length);
@@ -1501,90 +1421,6 @@ void bindex_scan_le(BinDex *bindex, BITS *result, CODE compare) {
   bindex_scan_lt(bindex, result, compare + 1);
 }
 
-void bindex_scan_gt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int bindex_id) {
-  
-  // TODO: gt should copy bitmap_not here!
-  compare = compare + 1;
-
-  int bitmap_len = bits_num_needed(bindex->length);
-  int area_idx = find_appropriate_fv(bindex, compare);
-
-  // set common compare here for use in refine
-  scan_max_compares[bindex_id][0] = compare;
-  scan_max_compares[bindex_id][1] = bindex->data_max;
-
-  // handle some boundary problems: <0, ==0, K-1, >K-1 (just like lt)
-  // <0: set all bits to 1. skip this face: CS[this bindex] x CM[other bindexs]
-  // ==0: may not cause problem here?
-  // K-1: set all bits to 0. just scan one face: CS[this bindex] x CM[other bindexs].
-  // K: set all bits to 0. should not call rt. interrupt other procedures now. should cancel merge as well?
-  
-  if (area_idx > K - 1) {
-
-    // set skip to true so refine thread will be informed to skip
-    scan_refine_mutex.lock();
-    scan_skip_refine = true;
-    scan_refine_mutex.unlock();
-
-    // don't memset here to avoid duplicated memset
-    // if(!scan_skip_refine) cudaMemset(dev_bitmap, 0xFF, bitmap_len);
-    return;
-  }
-
-  if (area_idx == K - 1) {
-    // 'compare' less than all raw_data, return all zero result
-    scan_refine_mutex.lock();
-    if(!scan_skip_refine) {
-      scan_skip_other_face[bindex_id] = true;
-      scan_selected_compares[bindex_id][0] = compare;
-      scan_selected_compares[bindex_id][1] = bindex->data_max;
-      // printf("comapre[%d]: %u %u\n", bindex_id, scan_selected_compares[bindex_id][0], scan_selected_compares[bindex_id][1]);
-      scan_refine_in_position += 1;
-    }
-    scan_refine_mutex.unlock();
-    
-    // TODO: don't memset here to avoid duplicated memset
-    // if(!scan_skip_refine) cudaMemset(dev_bitmap, 0, bitmap_len);
-    return;
-  }
-  
-  if (area_idx < 0) {
-    // 'compare' less than all raw_data, return all 1 result
-    // BITS* result = (BITS*)malloc(sizeof(BITS) * bitmap_len);
-
-    scan_refine_mutex.lock();
-    if(!scan_skip_refine) {
-      scan_skip_this_face[bindex_id] = true;
-      scan_selected_compares[bindex_id][0] = compare;
-      scan_selected_compares[bindex_id][1] = bindex->data_max;
-      scan_refine_in_position += 1;
-    }
-    scan_refine_mutex.unlock();
-
-    // cudaMemset(dev_bitmap, 0xFF, bitmap_len);
-
-    return;
-  }
-
-
-  // set refine compares here
-  // scan_refine_mutex.lock();
-  scan_refine_mutex.lock();
-  scan_selected_compares[bindex_id][0] = compare;
-  if (area_idx + 1 < K)
-    scan_selected_compares[bindex_id][1] = bindex->areaStartValues[area_idx + 1];
-  else 
-    scan_selected_compares[bindex_id][1] = bindex->data_max;
-  scan_refine_in_position += 1;
-  scan_refine_mutex.unlock();
-
-  // we use the one larger than compare here, so rt must return result to append (maybe with and)    retrun range -> | RT Scan | Bindex filter vector |
-  PRINT_EXCECUTION_TIME("copy",
-                        copy_filter_vector_in_GPU(bindex, dev_bitmap, area_idx, true))
-
-  
-}
-
 void bindex_scan_gt(BinDex *bindex, BITS *result, CODE compare) {
   // TODO: (compare + 1) overflow
   compare = compare + 1;
@@ -1642,57 +1478,6 @@ void bindex_scan_gt(BinDex *bindex, BITS *result, CODE compare) {
 void bindex_scan_ge(BinDex *bindex, BITS *result, CODE compare) {
   // TODO: (compare - 1) overflow
   bindex_scan_gt(bindex, result, compare - 1);
-}
-
-void bindex_scan_bt_in_GPU(BinDex *bindex, BITS *result, CODE compare1, CODE compare2, int bindex_id) {
-  assert(compare2 > compare1);
-  // TODO: (compare1 + 1) overflow
-  compare1 = compare1 + 1;
-
-  int bitmap_len = bits_num_needed(bindex->length);
-
-  // x > compare1
-  int area_idx_l = find_appropriate_fv(bindex, compare1);;
-  if (area_idx_l < 0) {
-    bindex_scan_lt_in_GPU(bindex, result, compare2, bindex_id);
-    return;
-  }
-  
-  bool is_upper_fv_l = false;
-  if (area_idx_l < K - 1) {
-    if (compare1 - bindex->areaStartValues[area_idx_l] < bindex->areaStartValues[area_idx_l + 1] - compare1) {
-      is_upper_fv_l = true;
-      // scan_inverse_this_face[bindex_id] = true;
-      scan_selected_compares[bindex_id][0] = bindex->areaStartValues[area_idx_l];
-      scan_selected_compares[bindex_id][1] = compare1;
-    } else {
-      scan_selected_compares[bindex_id][0] = compare1;
-      scan_selected_compares[bindex_id][1] = bindex->areaStartValues[area_idx_l + 1];
-    }
-  }
-
-  // x < compare2
-  int area_idx_r = find_appropriate_fv(bindex, compare2);
-  bool is_upper_fv_r = false;
-  if (area_idx_r < K - 1) {
-    if (compare2 - bindex->areaStartValues[area_idx_r] < bindex->areaStartValues[area_idx_r + 1] - compare2) {
-      is_upper_fv_r = true;
-      // scan_inverse_this_face[bindex_id + 3] = true;
-      scan_selected_compares[bindex_id + 3][0] = bindex->areaStartValues[area_idx_r];
-      scan_selected_compares[bindex_id + 3][1] = compare2;
-    } else {
-      scan_selected_compares[bindex_id + 3][0] = compare2;
-      scan_selected_compares[bindex_id + 3][1] = bindex->areaStartValues[area_idx_r + 1];
-    }
-  }
-
-
-  PRINT_EXCECUTION_TIME("copy",
-                        copy_filter_vector_bt_in_GPU(bindex,
-                                              result,
-                                              is_upper_fv_l ? (area_idx_l - 1) : (area_idx_l),
-                                              is_upper_fv_r ? (area_idx_r - 1) : (area_idx_r))
-                        )
 }
 
 void bindex_scan_bt(BinDex *bindex, BITS *result, CODE compare1, CODE compare2) {
@@ -1788,19 +1573,6 @@ void bindex_scan_bt(BinDex *bindex, BITS *result, CODE compare1, CODE compare2) 
                           refine_positions(result, area_r->blocks[block_idx_r]->pos + pos_idx_r, area_r->blocks[block_idx_r]->length - pos_idx_r);
                         )
   // clang-format on
-}
-
-void bindex_scan_eq_in_GPU(BinDex *bindex, BITS *result, CODE compare, int bindex_id) {
-
-  // just set MC = SC = [compare - 1, compare + 1] and skip_face = true
-  scan_refine_mutex.lock();
-  scan_skip_this_face[bindex_id] = true;
-  scan_max_compares[bindex_id][0] = compare - 1;
-  scan_max_compares[bindex_id][1] = compare + 1;
-  scan_selected_compares[bindex_id][0] = compare - 1;
-  scan_selected_compares[bindex_id][1] = compare + 1;
-  scan_refine_in_position += 1;
-  scan_refine_mutex.unlock();
 }
 
 void bindex_scan_eq(BinDex *bindex, BITS *result, CODE compare) {
@@ -2036,9 +1808,9 @@ void free_bindex(BinDex *bindex, CODE *raw_data) {
   }
 
   // Area *areas[K]
-  // for (int i = 0; i < K; i++) {
-  //   free_area(bindex->areas[i]);
-  // }
+  for (int i = 0; i < K; i++) {
+    free_area(bindex->areas[i]);
+  }
 
   free(bindex);
 }
@@ -2076,129 +1848,7 @@ std::vector<CODE> get_target_numbers(string s) {
   return result;
 }
 
-// remember to free data ptr after using
-void getDataFromFile(char *DATA_PATH, CODE **initial_data, int bindex_num)
-{
-  FILE* fp;
-
-  if (!(fp = fopen(DATA_PATH, "rb"))) {
-    printf("init_data_from_file: fopen(%s) faild\n", DATA_PATH);
-    exit(-1);
-  }
-  printf("initing data from %s\n", DATA_PATH);
-
-  for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-    initial_data[bindex_id] = (CODE*)malloc(N * sizeof(CODE));
-    CODE* data = initial_data[bindex_id];
-    // 8/16/32 only
-    if (CODEWIDTH == 8) {
-      uint8_t* file_data = (uint8_t*)malloc(N * sizeof(uint8_t));
-      if (fread(file_data, sizeof(uint8_t), N, fp) == 0) {
-        printf("init_data_from_file: fread faild.\n");
-        exit(-1);
-      }
-      for (int i = 0; i < N; i++)
-        data[i] = file_data[i];
-      free(file_data);
-    } else if (CODEWIDTH == 16) {
-      uint16_t* file_data = (uint16_t*)malloc(N * sizeof(uint16_t));
-      if (fread(file_data, sizeof(uint16_t), N, fp) == 0) {
-        printf("init_data_from_file: fread faild.\n");
-        exit(-1);
-      }
-      for (int i = 0; i < N; i++)
-        data[i] = file_data[i];
-      free(file_data);
-    } else if (CODEWIDTH == 32) {
-      if (fread(data, sizeof(uint32_t), N, fp) == 0) {
-        printf("init_data_from_file: fread faild.\n");
-        exit(-1);
-      }
-      for (int i = 0; i < N; i++)
-        data[i] = data[i] & data_range_list[bindex_id];
-    } else {
-      printf("init_data_from_file: CODE_WIDTH != 8/16/32.\n");
-      exit(-1);
-    }
-    printf("[CHECK] col %d  first num: %u  last num: %u\n", bindex_id, initial_data[bindex_id][0], initial_data[bindex_id][N - 1]);
-  }
-}
-
-void compare_bitmap(BITS *bitmap_a, BITS *bitmap_b, int len, CODE **raw_data, int bindex_num)
-{
-  int total_hit = 0;
-  int true_hit = 0;
-  for (int i = 0; i < len; i++) {
-    int data_a = (bitmap_a[i >> BITSSHIFT] & (1U << (BITSWIDTH - 1 - i % BITSWIDTH)));
-    int data_b = (bitmap_b[i >> BITSSHIFT] & (1U << (BITSWIDTH - 1 - i % BITSWIDTH)));
-    if (data_a) {
-      total_hit += 1;
-      if (data_b) true_hit += 1;
-    }
-    if (data_a != data_b) {
-      printf("[ERROR] check error in raw_data[%d]=", i);
-      printf(" %u / %u / %u \n", raw_data[0][i], raw_data[1][i], raw_data[2][i]);
-      printf("the correct is %u, but we have %u\n", data_a, data_b);
-      for (int j = 0; j < bindex_num; j++) {
-        printf("SC[%d] = [%u,%u], MC[%d] = [%u,%u]\n",j,scan_selected_compares[j][0],scan_selected_compares[j][1],
-        j,scan_max_compares[j][0],scan_max_compares[j][1]);
-      }
-      break;
-    }
-  }
-  printf("[CHECK]hit %d/%d\n", true_hit, total_hit);
-  return;
-}
-
-void check_bitmap_correct(BITS *bitmap_a,int len, CODE *raw_data, int bindex_num, OPERATOR OP, CODE target1, CODE target2)
-{
-  for (int i = 0; i < len; i++) {
-    // printf("i:%d\n", i >> BITSSHIFT);
-    BITS bit_a = (bitmap_a[i >> BITSSHIFT] & (1U << (BITSWIDTH - 1 - i % BITSWIDTH)));
-    if (!bit_a) 
-      continue;
-      // printf("bit[%d]:%d\n", i, bit_a);
-    bool hit = false;
-    switch (OP)
-    {
-    case LT:
-      if (raw_data[i] < target1) hit = true;
-      break;
-    case LE:
-      if (raw_data[i] <= target1) hit = true;
-      break;
-    case GT:
-      if (raw_data[i] > target1) hit = true;
-      break;
-    case GE:
-      if (raw_data[i] >= target1) hit = true;
-      break;
-    case EQ:
-      if (raw_data[i] == target1) hit = true;
-      break;
-    case BT:
-      if (raw_data[i] > target1 && raw_data[i] < target2) hit = true;
-      break;
-    default:
-      break;
-    }
-    if (!hit){
-      printf("[ERROR] check error in raw_data[%d]=", i);
-      printf(" %u\n", raw_data[i]);
-      printf("bit=%u\n", bit_a);
-      printf("bitmap=%u\n", bitmap_a[i >> BITSSHIFT]);
-      for (int j = 0; j < bindex_num; j++) {
-        printf("SC[%d] = [%u,%u], MC[%d] = [%u,%u]\n",j,scan_selected_compares[j][0],scan_selected_compares[j][1],
-        j,scan_max_compares[j][0],scan_max_compares[j][1]);
-      }
-      break;
-    }
-  }
-  return;
-}
-
-
-void raw_scan(BinDex *bindex, BITS *bitmap, CODE target1, CODE target2, OPERATOR OP, CODE *raw_data, BITS* compare_bitmap)
+void raw_scan(BinDex *bindex, BITS *bitmap, CODE target1, CODE target2, OPERATOR OP, CODE *raw_data, BITS* compare_bitmap = NULL)
 {
   for(int i = 0; i < bindex->length; i++) {
     bool hit = false;
@@ -2276,13 +1926,12 @@ void raw_scan_entry(std::vector<CODE>* target_l, std::vector<CODE>* target_r, st
   } */
 
   // CPU merge
-  
   // int stride = 156250;
   // if (N / stride / CODEWIDTH > THREAD_NUM) {
   //   stride = N / THREAD_NUM / CODEWIDTH;
   //   printf("No enough threads, set stride to %d\n", stride);
   // }
-
+  
   int max_idx = (N + CODEWIDTH - 1) / CODEWIDTH;
   int stride = (max_idx + THREAD_NUM - 1) / THREAD_NUM;
 
@@ -2298,11 +1947,7 @@ void raw_scan_entry(std::vector<CODE>* target_l, std::vector<CODE>* target_r, st
       }
       // printf("start idx: %d end idx: %d\n",start_idx, end_idx);
       // refine_result_bitmap(mergeBitmap, bitmap, start_idx, end_idx, t_id);
-      threads[t_id] = std::thread(
-        refine_result_bitmap, 
-        mergeBitmap, bitmap, 
-        start_idx, end_idx, t_id
-      );
+      threads[t_id] = std::thread(refine_result_bitmap, mergeBitmap, bitmap, start_idx, end_idx, t_id);
       start_idx += stride;
       t_id += 1;
     }
@@ -2311,611 +1956,63 @@ void raw_scan_entry(std::vector<CODE>* target_l, std::vector<CODE>* target_r, st
   }
 }
 
-void scan_multithread_withGPU(std::vector<CODE> *target_l, std::vector<CODE> *target_r,  CODE target1, CODE target2, std::string search_cmd, BinDex *bindex, BITS *bitmap, int bindex_id)
+void compare_bitmap(BITS *bitmap_a, BITS *bitmap_b, int len, CODE **raw_data, int bindex_num)
 {
-  // CODE target1, target2;
-  for (int pi = 0; pi < target_l->size(); pi++) {
-    printf("RUNNING %d\n", pi);
-    target1 = (*target_l)[pi];
-    if (target_r->size() != 0) {
-      assert(search_cmd == "bt");
-      target2 = (*target_r)[pi];
+  int total_hit = 0;
+  int true_hit = 0;
+  for (int i = 0; i < len; i++) {
+    int data_a = (bitmap_a[i >> BITSSHIFT] & (1U << (BITSWIDTH - 1 - i % BITSWIDTH)));
+    int data_b = (bitmap_b[i >> BITSSHIFT] & (1U << (BITSWIDTH - 1 - i % BITSWIDTH)));
+    if (data_a) {
+      total_hit += 1;
+      if (data_b) true_hit += 1;
     }
-    if (search_cmd == "bt" && target1 > target2) {
-      std::swap(target1, target2);
-    }
-
-    if (search_cmd == "lt") {
-      PRINT_EXCECUTION_TIME("lt", bindex_scan_lt_in_GPU(bindex, bitmap, target1, bindex_id));
-      // check(bindex, bitmap, target1, 0, LT, raw_datas);
-    } else if (search_cmd == "le") {
-      PRINT_EXCECUTION_TIME("le", bindex_scan_lt_in_GPU(bindex, bitmap, target1 + 1, bindex_id));
-      // check(bindex, bitmap, target1, 0, LE, raw_datas);
-    } else if (search_cmd == "gt") {
-      PRINT_EXCECUTION_TIME("gt", bindex_scan_gt_in_GPU(bindex, bitmap, target1, bindex_id));
-      // check(bindex, bitmap, target1, 0, GT, raw_datas);
-    } else if (search_cmd == "ge") {
-      PRINT_EXCECUTION_TIME("ge", bindex_scan_gt_in_GPU(bindex, bitmap, target1 - 1, bindex_id));
-      // check(bindex, bitmap, target1, 0, GE, raw_datas);
-    } else if (search_cmd == "eq") {
-      PRINT_EXCECUTION_TIME("eq", bindex_scan_eq_in_GPU(bindex, bitmap, target1, bindex_id));
-      // check(bindex, bitmap, target1, 0, EQ, raw_datas);
-    } else if (search_cmd == "bt") {
-      PRINT_EXCECUTION_TIME("bt", bindex_scan_bt_in_GPU(bindex, bitmap, target1, target2, bindex_id));
-      // check(bindex, bitmap, target1, target2, BT, raw_datas);
-    }
-
-    printf("\n");
-  }
-
-  // GPU refine will be done out of this function because we should collect all three (bindex_num) selectivity before refine so we can start RT
-  // However, we will not wait for the last merge to be done before starting to refine, they can be paralleled.
-  // So, when we scan above, we will set a global signal and a query array at once when query range is determined.
-
-  // merge should be done out of this function as well since some don't need merge (0xFF) and some can just return 0x00
-  // TODO: remove mergeBitmap later
-}
-
-void scan_multithread(std::vector<CODE> *target_l, std::vector<CODE> *target_r, CODE target1, CODE target2, std::string search_cmd, BinDex *bindex, BITS *bitmap, BITS *mergeBitmap)
-{
-  for (int pi = 0; pi < target_l->size(); pi++) {
-    printf("RUNNING %d\n", pi);
-    target1 = (*target_l)[pi];
-    if (target_r->size() != 0) {
-      assert(search_cmd == "bt");
-      target2 = (*target_r)[pi];
-    }
-    if (search_cmd == "bt" && target1 > target2) {
-      std::swap(target1, target2);
-    }
-
-    if (search_cmd == "lt") {
-      PRINT_EXCECUTION_TIME("lt", bindex_scan_lt(bindex, bitmap, target1));
-      // check(bindex, bitmap, target1, 0, LT, raw_datas);
-    } else if (search_cmd == "le") {
-      PRINT_EXCECUTION_TIME("le", bindex_scan_le(bindex, bitmap, target1));
-      // check(bindex, bitmap, target1, 0, LE, raw_datas);
-    } else if (search_cmd == "gt") {
-      PRINT_EXCECUTION_TIME("gt", bindex_scan_gt(bindex, bitmap, target1));
-      // check(bindex, bitmap, target1, 0, GT, raw_datas);
-    } else if (search_cmd == "ge") {
-      PRINT_EXCECUTION_TIME("ge", bindex_scan_ge(bindex, bitmap, target1));
-      // check(bindex, bitmap, target1, 0, GE, raw_datas);
-    } else if (search_cmd == "eq") {
-      PRINT_EXCECUTION_TIME("eq", bindex_scan_eq(bindex, bitmap, target1));
-      // check(bindex, bitmap, target1, 0, EQ, raw_datas);
-    } else if (search_cmd == "bt") {
-      PRINT_EXCECUTION_TIME("bt", bindex_scan_bt(bindex, bitmap, target1, target2));
-      // check(bindex, bitmap, target1, target2, BT, raw_datas);
-    }
-  }
-
-  /* for (int bindex_id = 1; bindex_id < bindex_num; bindex_id++) {
-    for (int m = 0; m < bitmap_len; m++) {
-      bitmap[0][m] = bitmap[0][m] & bitmap[m];
-    }
-  } */
-
-  // CPU merge
-  // int stride = 156250;
-  // if (N / stride / CODEWIDTH > THREAD_NUM) {
-  //   stride = N / THREAD_NUM / CODEWIDTH;
-  //   printf("No enough threads, set stride to %d\n", stride);
-  // }
-
-  int max_idx = (N + CODEWIDTH - 1) / CODEWIDTH;
-  int stride = (max_idx + THREAD_NUM - 1) / THREAD_NUM;
-
-  if (mergeBitmap != bitmap) {
-    std::thread threads[THREAD_NUM];
-    int start_idx = 0;
-    int end_idx = 0;
-    size_t t_id = 0;
-    while (end_idx < max_idx && t_id < THREAD_NUM) {
-      end_idx = start_idx + stride;
-      if (end_idx > max_idx) {
-        end_idx = max_idx;
-      }
-      // printf("start idx: %d end idx: %d\n",start_idx, end_idx);
-      // refine_result_bitmap(mergeBitmap, bitmap, start_idx, end_idx, t_id);
-      threads[t_id] = std::thread(
-        refine_result_bitmap, 
-        mergeBitmap, bitmap, 
-        start_idx, end_idx, t_id
-      );
-      start_idx += stride;
-      t_id += 1;
-    }
-    for (int i = 0; i < THREAD_NUM; i++)
-      threads[i].join();
-  }
-}
-
-void showCompares(float **compares, int x, int y)
-{
-  for (int i = 0; i < x; i++) {
-    printf("[INFO]");
-    for (int j = 0; j < y; j++) {
-      printf("compares[%d][%d] = %f ", i, j, compares[i][j]);
-    }
-    printf("\n");
-  }
-}
-
-int calculate_ray_segment_num(int direction, double *predicate, BinDex **bindexs, int best_ray_num)
-{
-  int width = density_width;
-  int height = density_height;
-  int launch_width;
-  int launch_height;
-  if (direction == 2) {
-      launch_width  = static_cast<int>((predicate[1] - predicate[0]) * width / (bindexs[0]->data_max - bindexs[0]->data_min)) + 1;
-      launch_height = static_cast<int>((predicate[3] - predicate[2]) * height / (bindexs[1]->data_max - bindexs[1]->data_min)) + 1;
-  } else if (direction == 1) {
-      launch_width  = static_cast<int>((predicate[1] - predicate[0]) * width / (bindexs[0]->data_max - bindexs[0]->data_min)) + 1;
-      launch_height = static_cast<int>((predicate[5] - predicate[4]) * height / (bindexs[2]->data_max - bindexs[2]->data_min)) + 1;
-  } else {
-      launch_width  = static_cast<int>((predicate[3] - predicate[2]) * width / (bindexs[1]->data_max - bindexs[1]->data_min)) + 1;
-      launch_height = static_cast<int>((predicate[5] - predicate[4]) * height / (bindexs[2]->data_max - bindexs[2]->data_min)) + 1;
-  }
-  printf("[LOG] launch width: %d launch height: %d\n",launch_width, launch_height);
-  int ray_segment_num = best_ray_num / launch_width / launch_height;
-  printf("[LOG] ray_segment_num: %d\n",ray_segment_num);
-  if (ray_segment_num <= 0) {
-    return 1;
-  }
-  else {
-    return ray_segment_num;
-  }
-}
-
-void special_eq_scan(CODE *target_l, CODE *target_r, BinDex **bindexs, BITS *dev_bitmap, const int bindex_num, string *search_cmd)
-{
-  if(DEBUG_TIME_COUNT) timer.commonGetStartTime(13);
-  if (DEBUG_INFO) {
-    printf("[INFO] use special eq scan\n");
-  }
-  // TODO: only support eq with lt now. maybe gt works, too...
-  double **compares = (double **)malloc(bindex_num * sizeof(double *));
-  double *dev_predicate = (double *)malloc(bindex_num * 2 * sizeof(double));
-  for (int i = 0; i < bindex_num; i++) {
-    compares[i] = &(dev_predicate[i * 2]);
-  }
-
-  // prepare MC and SC
-
-  int direction = 0;
-
-  for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-    if (search_cmd[bindex_id] == "eq") {
-      compares[bindex_id][0] = double(target_l[bindex_id]) - 1.0;
-      if (compares[bindex_id][0] < 0) compares[bindex_id][0] = 0;
-      // TODO: overflow
-      compares[bindex_id][1] = double(target_l[bindex_id]) + 2.0;
-
-      // TODO: 2= situation should use select MC face as the wide face, fix this later
-      direction = bindex_id;
-    } else if (search_cmd[bindex_id] == "lt") {
-      compares[bindex_id][0] = bindexs[bindex_id]->data_min - 1.0;
-      compares[bindex_id][1] = double(target_l[bindex_id]);
-      if (compares[bindex_id][0] > compares[bindex_id][1]) {
-        swap(compares[bindex_id][0],compares[bindex_id][1]);
-      }
-    } else if (search_cmd[bindex_id] == "gt") {
-      compares[bindex_id][0] = double(target_l[bindex_id]);
-      compares[bindex_id][1] = bindexs[bindex_id]->data_max + 1.0;
-    } else {
-      // printf("[ERROR] %s not support yet!\n", search_cmd[bindex_id]);
-      printf("[ERROR] not support yet!\n");
-      exit(-1);
-    }
-  }
-  
-
-  if(DEBUG_INFO) {
-    for (int i = 0; i < 6; i++) {
-        printf("%f ", dev_predicate[i]);
-    }
-    printf("\n");
-    printf("direction = %d\n", direction);
-    printf("ray segment num = %d\n", default_ray_segment_num);
-    printf("[INFO] compares prepared.\n");
-  }
-  // default_ray_length = -1;
-  if (with_refine) {
-    refineWithOptix(dev_bitmap, dev_predicate, bindex_num, default_ray_length, default_ray_segment_num, false, direction, default_ray_mode);
-  }
-  if(DEBUG_TIME_COUNT) timer.commonGetEndTime(13);
-}
-
-int get_wide_face(double **compares, int bindex_num)
-{
-  double min_distance = compares[0][1] - compares[0][0];
-  int wide_face_id = 0;
-  for (int bindex_id = 1; bindex_id < bindex_num; bindex_id++) {
-    if (compares[bindex_id][1] - compares[bindex_id][0] < min_distance) {
-      min_distance = compares[bindex_id][1] - compares[bindex_id][0];
-      wide_face_id = bindex_id;
-    }
-  }
-  return wide_face_id;
-}
-
-int get_refine_space_side(double **compares, int bindex_num, int face_direction) {
-  double dis = compares[0][1] - compares[0][0];
-  int d = 0;
-  for (int bindex_id = 1; bindex_id < bindex_num; bindex_id++) {
-    if (face_direction == 0) { // wide face, short side
-      if (compares[bindex_id][1] - compares[bindex_id][0] < dis) {
-        dis = compares[bindex_id][1] - compares[bindex_id][0];
-        d = bindex_id;
-      }
-    } else { // narrow face, long side
-      if (compares[bindex_id][1] - compares[bindex_id][0] > dis) {
-        dis = compares[bindex_id][1] - compares[bindex_id][0];
-        d = bindex_id;
-      }
-    }
-  }
-  return d;
-}
-
-void refine_with_GPU(BinDex **bindexs, BITS *dev_bitmap, const int bindex_num)
-{
-  // TODO: don't need bindexs here any more, remove it later
-  bool adjust_ray_num = false; // switch for fixed ray number: `true` for `fixed`
-  int default_ray_total_num = 20000;
-  int ray_length = default_ray_length; // set to -1 so rt will use default segmentnum set
-
-  if(DEBUG_TIME_COUNT) timer.commonGetStartTime(18);
-  double **compares = (double **)malloc(bindex_num * sizeof(double *));
-  double *dev_predicate = (double *)malloc(bindex_num * 2 * sizeof(double));
-  for (int i = 0; i < bindex_num; i++) {
-    compares[i] = &(dev_predicate[i * 2]);
-  }
-  if(DEBUG_TIME_COUNT) timer.commonGetEndTime(18);
-  
-  if(DEBUG_TIME_COUNT) timer.commonGetStartTime(13);
-  // if there is a compare totally out of boundary, refine procedure can be skipped
-  if (scan_skip_refine) {
-    if(DEBUG_INFO) printf("[INFO] Search out of boundary, skip all refine.\n");
-    if(DEBUG_TIME_COUNT) timer.commonGetEndTime(13);
-    return;
-  }
-
-  // check if we can scan only one face
-  for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-    if(scan_skip_other_face[bindex_id]) {
-      if(DEBUG_INFO) printf("[INFO] %d face scan, other skipped.\n",bindex_id);
-      // no matter use sc or mc
-      compares[bindex_id][0] = scan_selected_compares[bindex_id][0];
-      compares[bindex_id][1] = scan_selected_compares[bindex_id][1];
-
-      for (int other_bindex_id = 0; other_bindex_id < bindex_num; other_bindex_id++) {
-        if (other_bindex_id == bindex_id) continue;
-        compares[other_bindex_id][0] = scan_max_compares[other_bindex_id][0];
-        compares[other_bindex_id][1] = scan_max_compares[other_bindex_id][1];
-      }
-
-      for (int i = 0; i < bindex_num; i++) {
-        if (compares[i][0] == compares[i][1]) {
-          if(DEBUG_INFO) printf("[INFO] %d face scan skipped for the same compares[0] and compares[1].\n",bindex_id);
-          if(DEBUG_TIME_COUNT) timer.commonGetEndTime(13);
-          return;
-        }
-      }
-
-      int direction = get_refine_space_side(compares, bindex_num, face_direction);
-
-      // calculate ray_segment_num
-      if (adjust_ray_num) default_ray_segment_num = calculate_ray_segment_num(direction, dev_predicate, bindexs, default_ray_total_num);
-      
-      // Solve bound problem
-      for (int i = 0; i < bindex_num; i++) {
-        compares[i][0] -= 1;
-      }
-      
-      // add refine here
-      // send compares, dev_bitmap, the result is in dev_bitmap
-      if(DEBUG_INFO) {
-        printf("[Prepared predicate]");
-        for (int i = 0; i < 6; i++) {
-            printf("%f ", dev_predicate[i]);
-        }
-        printf("\n");
-        printf("direction = %d\n", direction);
-        printf("[INFO] compares prepared.\n");
-      }
-      //TODO: check inverse here
-      refineWithOptix(dev_bitmap, dev_predicate, bindex_num, ray_length, default_ray_segment_num, false, direction, default_ray_mode);
-      if(DEBUG_TIME_COUNT) timer.commonGetEndTime(13);
-      return;
-    }
-  }
-
-  double selectivity = 0.0;
-  // rt scan every face
-  /// split inversed face and non-inversed face first
-  std::vector<int> inversed_face;
-  std::vector<int> normal_face;
-  for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-    if (scan_inverse_this_face[bindex_id]) {
-      inversed_face.push_back(bindex_id);
-    }
-    else {
-      normal_face.push_back(bindex_id);
-    }
-  }
-  /// start refine
-  int max_MS_face_count = 0;
-  for (int i = 0; i < bindex_num; i++) {
-    double face_selectivity = 1.0;
-    bool inverse = false;
-    int bindex_id;
-    if (normal_face.size() != 0) {
-      bindex_id = normal_face[0];
-      normal_face.erase(normal_face.begin());
-    }
-    else if (inversed_face.size() != 0) {
-      bindex_id = inversed_face[0];
-      inversed_face.erase(inversed_face.begin());
-      inverse = true;
-    }
-
-    int current_MS_face_count = 0;
-    if(scan_skip_this_face[bindex_id]) {
-      if(DEBUG_INFO) printf("[INFO] %d face scan skipped.\n",bindex_id);
-      continue;
-    }
-    // select SC face
-    // TODO: use set_in_order to make sure [0] < [1] 
-    compares[bindex_id][0] = scan_selected_compares[bindex_id][0];
-    compares[bindex_id][1] = scan_selected_compares[bindex_id][1];
-
-    // revise S and C here to avoid a < x < b scan
-    // TODO: S is the smaller one in lt (-1) scan but the bigger one in gt (+1)
-    // fix gt later
-    // compares[bindex_id][0] -= 1.0;
-
-    // TODO: MS should be set in order of SC set, fix this later
-    for (int other_bindex_id = 0; other_bindex_id < bindex_num; other_bindex_id++) {
-      if (other_bindex_id == bindex_id) continue;
-      if (current_MS_face_count < max_MS_face_count) {
-        // TODO: change scan_selected_compares to a default SC structure instead of changing here
-        CODE S;
-        if (inverse) 
-          S = scan_selected_compares[other_bindex_id][1];
-        else
-          S = scan_selected_compares[other_bindex_id][0];
-        if (scan_max_compares[other_bindex_id][0] < S) {
-          compares[other_bindex_id][0] = scan_max_compares[other_bindex_id][0];
-          compares[other_bindex_id][1] = S;
-        }
-        else {
-          compares[other_bindex_id][0] = S;
-          compares[other_bindex_id][1] = scan_max_compares[other_bindex_id][0];
-        }
-        current_MS_face_count += 1;
-      } else {
-        compares[other_bindex_id][0] = scan_max_compares[other_bindex_id][0];
-        compares[other_bindex_id][1] = scan_max_compares[other_bindex_id][1];
-      }
-    }
-
-    bool mid_skip_flag = false;
-    for (int j = 0; j < bindex_num; j++) {
-      if (compares[j][0] == compares[j][1]) {
-        if(DEBUG_INFO) printf("[INFO] %d face scan skipped for the same compares[0] and compares[1].\n",bindex_id);
-        mid_skip_flag = true;
-        break;
-      }
-    }
-    if (mid_skip_flag) continue;
-
-    if(DEBUG_INFO) {
-      for (int i = 0; i < bindex_num; i++) {
-        face_selectivity *= double(compares[i][1] - compares[i][0]) / double(bindexs[i]->data_max - bindexs[i]->data_min);
-      }
-      selectivity += face_selectivity;
-    }
-
-    int direction = get_refine_space_side(compares, bindex_num, face_direction);
-
-    // calculate ray_segment_num
-    if (adjust_ray_num) default_ray_segment_num = calculate_ray_segment_num(direction, dev_predicate, bindexs, default_ray_total_num);
-
-    // Solve bound problem
-    for (int i = 0; i < bindex_num; i++) {
-      compares[i][0] -= 1;
-    }
-
-    // add refine here
-    // send compares, dev_bitmap, the result is in dev_bitmap
-    // TODO: use refine for bt, means c[0] < x < c[1], this may have problems when c[0] should be reached, consider using c[0]-1 instead
-    if(DEBUG_INFO) {
-      printf("[Prepared predicate] MS = %d, predicate: ", max_MS_face_count);
-      for (int i = 0; i < 6; i++) {
-          printf("%f ", dev_predicate[i]);
-      }
-      printf("\n");
-      printf("direction = %d\n", direction);
-      printf("[INFO] compares prepared.\n");
-    }
-    refineWithOptix(dev_bitmap, dev_predicate, bindex_num, ray_length, default_ray_segment_num, inverse, direction, default_ray_mode);
-    
-    max_MS_face_count += 1;
-  }
-  if(DEBUG_INFO) printf("total selectivity: %f\n", selectivity);
-  if(DEBUG_TIME_COUNT) timer.commonGetEndTime(13);
-  return;
-}
-
-void merge_with_GPU(BITS *merge_bitmap, BITS **dev_bitmaps, const int bindex_num, const int bindex_len)
-{
-  timer.commonGetStartTime(15);
-
-  int bitmap_len = bits_num_needed(bindex_len);
-  if (scan_skip_refine) {
-    if(DEBUG_INFO) printf("[INFO] Search out of boundary, skip all merge.\n");
-    cudaMemset(merge_bitmap, 0, bitmap_len * sizeof(BITS));
-    timer.commonGetEndTime(15);
-    return;
-  }
-
-  for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-    if(scan_skip_other_face[bindex_id]) {
-      if(DEBUG_INFO) printf("[INFO] %d face merge, other skipped.\n",bindex_id);
-      cudaMemset(merge_bitmap, 0, bitmap_len * sizeof(BITS));
-      timer.commonGetEndTime(15);
-      return;
-    }
-  }
-
-  for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-    if (merge_bitmap == dev_bitmaps[bindex_id]) {
-      if (scan_skip_this_face[bindex_id]) {
-        if(DEBUG_INFO) printf("[INFO] merge face %d skipped, set it to 0xFF\n", bindex_id);
-        cudaMemset(merge_bitmap, 0xFF, bitmap_len * sizeof(BITS));
-      }
+    if (data_a != data_b) {
+      printf("[ERROR] check error in raw_data[%d]=", i);
+      printf(" %u / %u / %u \n", raw_data[0][i], raw_data[1][i], raw_data[2][i]);
+      printf("the correct is %#x, but we have %#x\n", data_a, data_b);
       break;
     }
   }
-
-  // int skip_num = 0;
-  for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-    if (!scan_skip_this_face[bindex_id]) {
-      if (merge_bitmap != dev_bitmaps[bindex_id]) {
-        GPUbitAndWithCuda(merge_bitmap, dev_bitmaps[bindex_id], bindex_len);
-      }
-    }
-    else {
-      if(DEBUG_INFO) printf("[INFO] %d face merge skipped.\n",bindex_id);
-      // skip_num++;
-    }
-  }
-
-  timer.commonGetEndTime(15);
-  return;
+  printf("[CHECK]hit %d/%d\n", true_hit, total_hit);
 }
 
-// Only support `lt` now.
-void generate_range_queries(vector<CODE> &target_lower, 
-                            vector<CODE> &target_upper,
-                            vector<string> &search_cmd,
-                            int column_num,
-                            CODE *range) {
-#ifndef RANGE_SELECTIVITY_11
-
-#if DISTRITION == 0                              
-  CODE span = UINT32_MAX / (NUM_QUERIES + 1);
-#else
-  CODE span = (max_val - min_val + NUM_QUERIES - 1) / NUM_QUERIES;
-#endif
-
-  target_lower.resize(NUM_QUERIES * column_num);
-  search_cmd.resize(NUM_QUERIES * column_num);
-  for (int i = 0; i < NUM_QUERIES; i++) {
-    for (int column_id = 0; column_id < column_num; column_id++) {
-      target_lower[i * column_num + column_id] = (i + 1) * span;
-      search_cmd[i * column_num + column_id] = "lt";
-    }
-  }
-
-#else
-  double span[3] = {1.0 * data_range_list[0] / (NUM_QUERIES - 1), 
-                    1.0 * data_range_list[1] / (NUM_QUERIES - 1), 
-                    1.0 * data_range_list[2] / (NUM_QUERIES - 1)};
-  target_lower.resize(NUM_QUERIES * column_num);
-  search_cmd.resize(NUM_QUERIES * column_num);
-  for (int i = 0; i < NUM_QUERIES; i++) {
-    for (int column_id = 0; column_id < column_num; column_id++) {
-      target_lower[i * column_num + column_id] = CODE(i * span[column_id]);
-      if (i == NUM_QUERIES - 1) {
-        if (range[2 * column_id + 1] != UINT32_MAX) {
-          target_lower[i * column_num + column_id] = range[2 * column_id + 1] + 1;
-        } else {
-          target_lower[i * column_num + column_id] = UINT32_MAX;
-        }
-      }
-      search_cmd[i * column_num + column_id] = "lt";
-    }
-  }
-#endif
-
-  for (int i = 0; i < NUM_QUERIES; i++) {
-    for (int column_id = 0; column_id < column_num; column_id++) {
-      printf("%s %u\n", search_cmd[i * column_num + column_id].c_str(), target_lower[i * column_num + column_id]);
-    }
-  }
+void start_timer(struct timeval* t) {
+    gettimeofday(t, NULL);
 }
 
-void generate_point_queries(vector<CODE> &target_lower, 
-                            vector<string> &search_cmd,
-                            int column_num) {
-#if DISTRITION == 0                              
-  CODE span = UINT32_MAX / (NUM_QUERIES + 1);
-#else
-  CODE span = (max_val - min_val + NUM_QUERIES - 1) / NUM_QUERIES;
-#endif
-
-  target_lower.resize(NUM_QUERIES * column_num);
-  search_cmd.resize(NUM_QUERIES * column_num);
-  for (int i = 0; i < NUM_QUERIES; i++) {
-    for (int column_id = 0; column_id < column_num; column_id++) {
-      target_lower[i * column_num + column_id] = (i + 1) * span;
-      search_cmd[i * column_num + column_id] = "eq";
-    }
-  }
+void stop_timer(struct timeval* t, double* elapsed_time) {
+    struct timeval end;
+    gettimeofday(&end, NULL);
+    *elapsed_time += (end.tv_sec - t->tv_sec) * 1000.0 + (end.tv_usec - t->tv_usec) / 1000.0;
 }
 
 void exp_opt(int argc, char *argv[]) {
   printf("N = %d\n", N);
-  printf("DISTRIBUTION: %d\n", DISTRIBUTION);
-  printf("K: %d\n", K);
-  
+  printf("K = %d\n", K);
+
   char opt;
   int selectivity;
   CODE target1, target2;
   char DATA_PATH[256] = "\0";
-  char SCAN_FILE[256] = "\0";
   char OPERATOR_TYPE[5];
-  // int CODE_WIDTH = sizeof(CODE) *8;
   int insert_num = 0;
-  int bindex_num = 3;
+  int bindex_num = 1;
   bool USEKEYBOARDINPUT = false;
 
-  density_width = 1200;
-  density_height = 1200; // maximum ray-width and maximum ray-height 
-  default_ray_segment_num = 64;
-
   // get command line options
+  bool STRICT_SELECTIVITY = false;
   bool TEST_INSERTING = false;
-
-  showGPUInfo();
-
-  while ((opt = getopt(argc, argv, "khl:r:n:a:b:c:d:e:f:g:w:m:o:p:q:s:u:v:y:z:")) != -1) {
+  while ((opt = getopt(argc, argv, "khsil:r:o:f:n:p:b:")) != -1) {
     switch (opt) {
       case 'h':
         printf(
             "Usage: %s \n"
-            "[-l <left target list>] [-r <right target list>]\n"
-            "[-a <ray-length>]\n" // -1: flexible length controlled by ray_segment_num, -2: fixed length controlled by ray_segment_num
-            "[-b <column-num>]\n"
-            "[-c <reduced-scanning>]\n"
-            "[-d <data-range>]\n"
-            "[-e <ray-mode>]\n"
-            "[-f <input-file>]\n"
-            "[-g <range-query>]\n"
-            "[-i test inserting]\n"
-            "[-w <ray-range-width>] [-m <ray-range-height>]\n"
-            "[-o <operator>]\n"
-            "[-p <scan-predicate-file>]\n"
-            "[-q <query-num>]\n"
-            "[-s <ray-segment-num>]\n"
-            "[-u <with-refine>]\n"
-            "[-v <cube-width>]\n"
-            "[-y <switch-for-reading-queries-from-file>]"
-            "[-z <face-direction-0=wide-1=narrow>]\n",
+            "[-l <left target list>] [-r <right target list>]"
+            "[-s use stric selectivity]"
+            "[-i test inserting]"
+            "[-p <scan-file>]"
+            "[-f <input-file>] [-o <operator>] \n",
             argv[0]);
         exit(0);
       case 'l':
@@ -2930,53 +2027,25 @@ void exp_opt(int argc, char *argv[]) {
       case 'f':
         strcpy(DATA_PATH, optarg);
         break;
+      case 'n':
+        // DATA_N
+        insert_num = atoi(optarg);
+        break;
       case 'b':
         bindex_num = atoi(optarg);
         break;
+      case 'p':
+        // prefetch_stride = str2uint32(optarg);
+        strcpy(scan_file, optarg);
+        break;
       case 's':
-        default_ray_segment_num = atoi(optarg);
+        STRICT_SELECTIVITY = true;
+        break;
+      case 'i':
+        TEST_INSERTING = true;
         break;
       case 'k':
         USEKEYBOARDINPUT = true;
-        break;
-      case 'w':
-        density_width = atoi(optarg);
-        break;
-      case 'm':
-        density_height = atoi(optarg);
-        break;
-      case 'p':
-        strcpy(SCAN_FILE, optarg);
-        break;
-      case 'a':
-        default_ray_length = atoi(optarg);
-        break;
-      case 'e':
-        default_ray_mode = atoi(optarg);
-        break;
-      case 'q':
-        NUM_QUERIES = atoi(optarg);
-        break;
-      case 'g':
-        RANGE_QUERY = atoi(optarg);
-        break;
-      case 'c':
-        REDUCED_SCANNING = atoi(optarg);
-        break;
-      case 'd':
-        sscanf(optarg, "%u,%u,%u", &data_range_list[0], &data_range_list[1], &data_range_list[2]);
-        break;
-      case 'u':
-        with_refine = atoi(optarg);
-        break;
-      case 'v':
-        cube_width = atoi(optarg);
-        break;
-      case 'y':
-        READ_QUERIES_FROM_FILE = atoi(optarg);
-        break;
-      case 'z':
-        face_direction = atoi(optarg);
         break;
       default:
         printf("Error: unknown option %c\n", (char)opt);
@@ -2990,289 +2059,207 @@ void exp_opt(int argc, char *argv[]) {
   // initial data
   CODE *initial_data[MAX_BINDEX_NUM];
 
+
   if (!strlen(DATA_PATH)) {
-    for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
+    for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++)
+    {
       initial_data[bindex_id] = (CODE *)malloc(N * sizeof(CODE));
       CODE *data = initial_data[bindex_id];
       printf("initing data by random\n");
-      // std::random_device rd;
-      // std::mt19937 mt(rd());
-      // std::uniform_int_distribution<CODE> dist(0, data_range_list[bindex_id]);
-      // // CODE mask = ((uint64_t)1 << (sizeof(CODE) * 8)) - 1;
-      // for (int i = 0; i < N; i++) {
-      //   // data[i] = dist(mt) & mask;
-      //   // assert(data[i] <= mask);
-      //   data[i] = dist(mt);
-      // }
-      
-      // srand ( unsigned ( time(0) ) ); // same random numbers
-      for (int i = 0; i < N; i++) {
-        data[i] = i % (data_range_list[bindex_id] + 1);
+      std::random_device rd;
+      std::mt19937 mt(rd());
+      std::uniform_int_distribution<CODE> dist(MINCODE, MAXCODE);
+      CODE mask = ((uint64_t)1 << (sizeof(CODE) * 8)) - 1;
+      for (int i = 0; i < N; i++)
+      {
+        data[i] = dist(mt) & mask;
+        assert(data[i] <= mask);
       }
-      random_shuffle(data, data + N);
     }
   } else {
-    getDataFromFile(DATA_PATH, initial_data, bindex_num);
-  }
+    FILE *fp;
 
-  // remap/encode initialdata
-  if (ENCODE) {
-    printf("[+] remapping initial data...\n");
-#if TPCH == 1
-    normalEncode(initial_data, bindex_num, 2, 4294967294, N); // encoding for TPCH
-#else
-    normalEncode(initial_data, bindex_num, 0, N, N); // encoding to range [encode_min, encode_max)
-#endif
-    malloc_trim(0); // https://blog.csdn.net/sebeefe/article/details/123614590
-    printf("[+] remap initial data done.\n");
-  }
+    if (!(fp = fopen(DATA_PATH, "rb"))) {
+      printf("init_data_from_file: fopen(%s) faild\n", DATA_PATH);
+      exit(-1);
+    }
+    printf("initing data from %s\n", DATA_PATH);
 
-  // init bindex
+    for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
+      initial_data[bindex_id] = (CODE*)malloc(N * sizeof(CODE));
+      CODE* data = initial_data[bindex_id];
+      // 8/16/32 only
+      if (CODEWIDTH == 8) {
+        uint8_t* file_data = (uint8_t*)malloc(N * sizeof(uint8_t));
+        if (fread(file_data, sizeof(uint8_t), N, fp) == 0) {
+          printf("init_data_from_file: fread faild.\n");
+          exit(-1);
+        }
+        for (int i = 0; i < N; i++)
+          data[i] = file_data[i];
+        free(file_data);
+      } else if (CODEWIDTH == 16) {
+        uint16_t* file_data = (uint16_t*)malloc(N * sizeof(uint16_t));
+        if (fread(file_data, sizeof(uint16_t), N, fp) == 0) {
+          printf("init_data_from_file: fread faild.\n");
+          exit(-1);
+        }
+        for (int i = 0; i < N; i++)
+          data[i] = file_data[i];
+        free(file_data);
+      } else if (CODEWIDTH == 32) {
+        uint32_t* file_data = (uint32_t*)malloc(N * sizeof(uint32_t));
+        if (fread(file_data, sizeof(uint32_t), N, fp) == 0) {
+          printf("init_data_from_file: fread faild.\n");
+          exit(-1);
+        }
+        uint32_t min_val = UINT32_MAX, max_val = 0;
+        for (int i = 0; i < N; i++) {
+          data[i] = file_data[i];
+          if (data[i] < min_val) min_val = data[i];
+          if (data[i] > max_val) max_val = data[i];
+        }
+        free(file_data);
+        printf("min_val: %u, max_val: %u\n", min_val, max_val);
+      } else {
+        printf("init_data_from_file: CODE_WIDTH != 8/16/32.\n");
+        exit(-1);
+      }
+      printf("[CHECK] col %d  first num: %u  last num: %u\n", bindex_id, initial_data[bindex_id][0], initial_data[bindex_id][N - 1]);
+    }
+
+    fclose(fp);
+  }
+  
   BinDex *bindexs[MAX_BINDEX_NUM];
-  CODE *raw_datas[MAX_BINDEX_NUM];
   for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
     // Build the bindex structure
     printf("Build the bindex structure %d...\n", bindex_id);
     CODE *data = initial_data[bindex_id];
     bindexs[bindex_id] = (BinDex *)malloc(sizeof(BinDex));
-    raw_datas[bindex_id] = (CODE *)malloc(N * sizeof(CODE));          // Store unsorted raw data in bindex
     if (DEBUG_TIME_COUNT) timer.commonGetStartTime(0);
-    init_bindex_in_GPU(bindexs[bindex_id], data, N, raw_datas[bindex_id], bindex_id);
+    PRINT_EXCECUTION_TIME("BinDex building", init_bindex(bindexs[bindex_id], data, N));
     if (DEBUG_TIME_COUNT) timer.commonGetEndTime(0);
     printf("\n");
   }
-  // display_bindex(bindex);
-  // printf("\n");
 
-  CODE *range = (CODE *) malloc(sizeof(CODE) * 6);
-  for (int i = 0; i < bindex_num; i++) {
-    range[i * 2] = bindexs[i]->data_min;
-    range[i * 2 + 1] = bindexs[i]->data_max;
-    
-    if (min_val > bindexs[i]->data_min) min_val = bindexs[i]->data_min;
-    if (max_val < bindexs[i]->data_max) max_val = bindexs[i]->data_max;
-  }
-  if (with_refine) {
-    initializeOptix(initial_data, N, density_width, density_height, 3, range, cube_width);
-  }
-  
-  if (default_ray_length == -2) {
-    default_ray_length = (max_val - min_val) / default_ray_segment_num;
-  }
-
+  // BinDex Scan
   printf("BinDex scan...\n");
 
-  // init result in CPU memory
   // result
-  BITS *bitmap[MAX_BINDEX_NUM];  // TODO: need +1 here for a free space to store multi-thread result ?
+  BITS *bitmap[MAX_BINDEX_NUM];
   int bitmap_len;
   for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
     bitmap_len = bits_num_needed(bindexs[bindex_id]->length);
     bitmap[bindex_id] = (BITS *)aligned_alloc(SIMD_ALIGEN, bitmap_len * sizeof(BITS));
     memset_mt(bitmap[bindex_id], 0xFF, bitmap_len);
   }
-  bitmap[bindex_num] = (BITS *)aligned_alloc(SIMD_ALIGEN, bitmap_len * sizeof(BITS));
-  memset_mt(bitmap[bindex_num], 0xFF, bitmap_len); // TODO: change bitmap_len here to a max len
 
-  // init result in GPU memory
-  BITS *dev_bitmap[MAX_BINDEX_NUM];  // TODO: need +1 here for a free space to store multi-thread result ?
-  cudaError_t cudaStatus;
-  for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-    bitmap_len = bits_num_needed(bindexs[bindex_id]->length);
-    cudaStatus = cudaMalloc((void**)&(dev_bitmap[bindex_id]), bitmap_len * sizeof(BITS));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed when init dev bitmap!");
-        exit(-1);
-    }
-    cudaMemset(dev_bitmap[bindex_id], 0xFF, bitmap_len * sizeof(BITS));
+  ifstream fin;
+  fin.open(scan_file);
+  if (!fin.is_open()) {
+    cerr << "Fail to open scan_file!" << endl;
+    exit(-1);
   }
-  cudaStatus = cudaMalloc((void**)&(dev_bitmap[bindex_num]), bitmap_len * sizeof(BITS));
-  if (cudaStatus != cudaSuccess) {
-      fprintf(stderr, "cudaMalloc failed when init dev bitmap!");
-      exit(-1);
-  }
-  cudaMemset(dev_bitmap[bindex_num], 0xFF, bitmap_len * sizeof(BITS)); // TODO: change bitmap_len here to a max len
+  int toExit = 1;
+  while(toExit != -1) {
+    std::vector<CODE> target_l[MAX_BINDEX_NUM];
+    std::vector<CODE> target_r[MAX_BINDEX_NUM]; 
+    string search_cmd[MAX_BINDEX_NUM];
 
-  // malloc dev bitmap for result after refine
-  BITS *dev_bitmap_for_refined_result;
-  cudaStatus = cudaMalloc((void**)&(dev_bitmap_for_refined_result), bitmap_len * sizeof(BITS)); // TODO: replace the bitmap_len with a maxlen
-  if (cudaStatus != cudaSuccess) {
-      fprintf(stderr, "cudaMalloc failed when init dev bitmap!");
-      exit(-1);
-  }
-  cudaMemset(dev_bitmap_for_refined_result, 0x00, bitmap_len * sizeof(BITS));
+    for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
+      cout << "input [operator] [target_l] [target_r] (" << bindex_id + 1 << "/" << bindex_num << ")" << endl;
+      string input;
 
-  vector<CODE> target_lower;
-  vector<CODE> target_upper; 
-  vector<string> search_cmd;
-
-  if (!READ_QUERIES_FROM_FILE) {  // generate queries
-    if (RANGE_QUERY) {
-      generate_range_queries(target_lower, target_upper, search_cmd, bindex_num, range);
-    } else {
-      generate_point_queries(target_lower, search_cmd, bindex_num);
+      if (USEKEYBOARDINPUT) {
+        getline(cin, input);
+      } else {
+        getline(fin, input);
+      }
+      cout << input << endl;
+      std::vector<std::string> cmds = stringSplit(input, ' ');
+      if (cmds[0] == "exit") exit(0);
+      search_cmd[bindex_id] = cmds[0];
+      if (cmds.size() > 1) {
+        target_l[bindex_id] = get_target_numbers(cmds[1]);
+      }
+      if (cmds.size() > 2) {
+        target_r[bindex_id] = get_target_numbers(cmds[2]);
+      }
     }
-  } else {            // read queries from file
-    ifstream fin;
-    if (!strlen(SCAN_FILE)) {
-      fin.open("test/scan_cmd.txt");
-    } else {
-      fin.open(SCAN_FILE);
-    }
-    printf("[LOG] Number of queries: %d\n", NUM_QUERIES);
-    target_lower.resize(NUM_QUERIES * bindex_num);
-    target_upper.resize(NUM_QUERIES * bindex_num);
-    search_cmd.resize(NUM_QUERIES * bindex_num);
-    for (int i = 0; i < NUM_QUERIES; i++) {
-      for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-        cout << "input [operator] [target_l] [target_r] (" << bindex_id + 1 << "/" << bindex_num << ")" << endl;
-        string input;
-        
-        if (USEKEYBOARDINPUT) {
-          getline(cin, input);
-        } else {
-          getline(fin, input);
+    timer.commonGetStartTime(11);
+    for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
+      for (int pi = 0; pi < target_l[bindex_id].size(); pi++) {
+        printf("RUNNING %d\n", pi);
+        target1 = target_l[bindex_id][pi];
+        if (target_r[bindex_id].size() != 0) {
+          assert(search_cmd[bindex_id] == "bt");
+          target2 = target_r[bindex_id][pi];
         }
-        cout << input << endl;
-        std::vector<std::string> cmds = stringSplit(input, ' ');
-        if (cmds[0] == "exit")
-          exit(0);
-        search_cmd[i * bindex_num + bindex_id] = cmds[0];
-        if (cmds.size() > 1) {
-          if (ENCODE) {
-            timer.commonGetStartTime(16);
-            target_lower[i * bindex_num + bindex_id] = encodeQuery(bindex_id, get_target_numbers(cmds[1])[0]);
-            timer.commonGetEndTime(16);
-            printf("[ENCODE] %u", target_lower[i * bindex_num + bindex_id]);
-          } else {
-            target_lower[i * bindex_num + bindex_id] = get_target_numbers(cmds[1])[0];
+        if (search_cmd[bindex_id] == "bt" && target1 > target2) {
+          std::swap(target1, target2);
+        }
+
+        for (int i = 0; i < RUNS; i++) {
+          if (search_cmd[bindex_id] == "lt") {
+            PRINT_EXCECUTION_TIME("lt", bindex_scan_lt(bindexs[bindex_id], bitmap[bindex_id], target1));
+            // check(bindexs[bindex_id], bitmap[bindex_id], target1, 0, LT, raw_datas[bindex_id]);
+          } else if (search_cmd[bindex_id] == "le") {
+            PRINT_EXCECUTION_TIME("le", bindex_scan_le(bindexs[bindex_id], bitmap[bindex_id], target1));
+            // check(bindexs[bindex_id], bitmap[bindex_id], target1, 0, LE, raw_datas[bindex_id]);
+          } else if (search_cmd[bindex_id] == "gt") {
+            PRINT_EXCECUTION_TIME("gt", bindex_scan_gt(bindexs[bindex_id], bitmap[bindex_id], target1));
+            // check(bindexs[bindex_id], bitmap[bindex_id], target1, 0, GT, raw_datas[bindex_id]);
+          } else if (search_cmd[bindex_id] == "ge") {
+            PRINT_EXCECUTION_TIME("ge", bindex_scan_ge(bindexs[bindex_id], bitmap[bindex_id], target1));
+            // check(bindexs[bindex_id], bitmap[bindex_id], target1, 0, GE, raw_datas[bindex_id]);
+          } else if (search_cmd[bindex_id] == "eq") {
+            PRINT_EXCECUTION_TIME("eq", bindex_scan_eq(bindexs[bindex_id], bitmap[bindex_id], target1));
+            // check(bindexs[bindex_id], bitmap[bindex_id], target1, 0, EQ, raw_datas[bindex_id]);
+          } else if (search_cmd[bindex_id] == "bt") {
+            PRINT_EXCECUTION_TIME("bt", bindex_scan_bt(bindexs[bindex_id], bitmap[bindex_id], target1, target2));
+            // check(bindexs[bindex_id], bitmap[bindex_id], target1, target2, BT, raw_datas[bindex_id]);
           }
-        }
-        if (cmds.size() > 2) {
-          if (ENCODE) {
-            timer.commonGetStartTime(16);
-            target_upper[i * bindex_num + bindex_id] = encodeQuery(bindex_id, get_target_numbers(cmds[2])[0]);
-            timer.commonGetEndTime(16);
-            printf(" %u", target_upper[i * bindex_num + bindex_id]);
-          } else {
-            target_upper[i * bindex_num + bindex_id] = get_target_numbers(cmds[2])[0];
-          }
-        }
-        if (ENCODE) {
+
           printf("\n");
         }
       }
     }
-  }
-  
-  for (int i = 0; i < NUM_QUERIES; i++) {
-    vector<CODE> target_l[bindex_num];
-    vector<CODE> target_r[bindex_num];
-    CODE target_l_new[bindex_num];
-    CODE target_r_new[bindex_num];
-    for (int j = 0; j < bindex_num; j++) {
-      target_l[j].push_back(target_lower[i * bindex_num + j]);
-      target_l_new[j] = target_l[j][0];
-      if (search_cmd[i * bindex_num + j] == "bt") {
-        target_r[j].push_back(target_upper[i * bindex_num + j]);
-        target_r_new[j] = target_r[j][0];
+
+    /* for (int bindex_id = 1; bindex_id < bindex_num; bindex_id++) {
+      for (int m = 0; m < bitmap_len; m++) {
+        bitmap[0][m] = bitmap[0][m] & bitmap[bindex_id][m];
       }
-    }
+    } */
     
-    // clean up refine slot
-    scan_refine_in_position = 0;
-    for(int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-      scan_selected_compares[bindex_id][0] = 0;
-      scan_selected_compares[bindex_id][1] = 0;
-      scan_max_compares[bindex_id][0] = 0;
-      scan_max_compares[bindex_id][1] = 0;
-      scan_skip_other_face[bindex_id] = false;
-      scan_skip_this_face[bindex_id] = false;
-      scan_inverse_this_face[bindex_id] = false;
-    }
-    scan_skip_refine = false;
-    // scan_use_special_compare = false;
-
-    timer.commonGetStartTime(11);
-    // special scan for = (eq) operator
-    // TODO: add scan_lt filter to avoid all 0 bitmap
-    bool eq_scan = false;
-    for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-      if (search_cmd[bindex_id] == "eq") {
-        cudaMemset(dev_bitmap[0], 0, bitmap_len * sizeof(BITS));
-        special_eq_scan(target_l_new, target_r_new, bindexs, dev_bitmap[0], bindex_num, search_cmd.data() + i * bindex_num);
-        eq_scan = true;
-        break;
-      }
-    }
     
-    if (!eq_scan){
-      assert(THREAD_NUM >= bindex_num);
-      std::thread threads[THREAD_NUM];
-      timer.commonGetStartTime(4);
-      for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-        // scan multi-thread with GPU
-        threads[bindex_id] = std::thread(scan_multithread_withGPU, 
-                                          &(target_l[bindex_id]), 
-                                          &(target_r[bindex_id]), 
-                                          target1, 
-                                          target2, 
-                                          search_cmd[i * bindex_num + bindex_id], 
-                                          bindexs[bindex_id], 
-                                          dev_bitmap[bindex_id],
-                                          bindex_id
-        );  // TODO: remove target 1, target 2 here
-      }
-      for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) threads[bindex_id].join();
-      timer.commonGetEndTime(4);
+    // int stride = 156250;
+    // if (N / stride / CODEWIDTH > THREAD_NUM) {
+    //   stride = N / THREAD_NUM + 1;
+    //   printf("No enough threads, set stride to %d\n",stride);
+    // }
 
-      // merge should be done before refine now since new refine relies on dev_bitmap[0]
-      merge_with_GPU(dev_bitmap[0], dev_bitmap, bindex_num, bindexs[0]->length);
+    int max_idx = (N + CODEWIDTH - 1) / CODEWIDTH;
+    int stride = (max_idx + THREAD_NUM - 1) / THREAD_NUM;
 
-      if (REDUCED_SCANNING) {
-        double rc = 1.0;
-        for (int i = 0; i < bindex_num; i++) {
-          rc *= 1.0 * scan_selected_compares[i][0] / scan_selected_compares[i][1];
-          printf("scan_selected_compares[%d] = %u %u\n", i, scan_selected_compares[i][0], scan_selected_compares[i][1]);
+    std::thread threads[THREAD_NUM];
+    for (int bindex_id = 1; bindex_id < bindex_num; bindex_id++) {
+      int start_idx = 0;
+      int end_idx = 0;
+      size_t t_id = 0;
+      while(end_idx < max_idx && t_id < THREAD_NUM) {
+        end_idx = start_idx + stride;
+        if (end_idx > max_idx) {
+          end_idx = max_idx;
         }
-        printf("[LOG] REDUCED_SCANNING: %lf\n", rc);
-        continue;
+        threads[t_id] = std::thread(refine_result_bitmap, bitmap[0], bitmap[bindex_id], start_idx, end_idx, t_id);
+        start_idx += stride;
+        t_id += 1;
       }
-      
-#if DEBUG_INFO == 1
-      for (int i = 0; i < 6; i++) {
-        printf("%u < x < %u\n", scan_selected_compares[i][0], scan_selected_compares[i][1]);
-      }
-#endif
-
-      if (with_refine) {
-        // GPU refine here
-        std::thread refine_thread = std::thread(refine_with_GPU, bindexs, dev_bitmap[0], bindex_num);  // TODO: maybe we don't need a new thread here?
-        refine_thread.join();
-      }
+      for (int i = 0; i < THREAD_NUM; i++) threads[i].join();
     }
+
     timer.commonGetEndTime(11);
-
-    if (!with_refine) {
-      timer.showTime();
-      timer.clear();
-      continue;
-    }
-
-    // transfer GPU result back to memory
-    BITS *h_result;
-    cudaStatus =  cudaMallocHost((void**)&(h_result), bitmap_len * sizeof(BITS));
-    if (cudaStatus != cudaSuccess) {
-      fprintf(stderr, "cudaMallocHost failed when init h_result!");
-      exit(-1);
-    }
-    timer.commonGetStartTime(12);
-    cudaStatus = cudaMemcpy(h_result, dev_bitmap[0], bits_num_needed(bindexs[0]->length) * sizeof(BITS), cudaMemcpyDeviceToHost); // only transfer bindex[0] here. may have some problems.
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "[ERROR]Result transfer, cudaMemcpy failed!");
-        exit(-1);
-    }
-    timer.commonGetEndTime(12);
     timer.showTime();
     timer.clear();
 
@@ -3288,28 +2275,46 @@ void exp_opt(int argc, char *argv[]) {
     // check final result 
     printf("[CHECK]check final result.\n");
     for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-      raw_scan_entry(&(target_l[bindex_id]), 
-                     &(target_r[bindex_id]), 
-                     search_cmd[i * bindex_num + bindex_id], 
-                     bindexs[bindex_id], 
-                     check_bitmap[bindex_id],
-                     check_bitmap[0],
-                     raw_datas[bindex_id]
-      );
+      raw_scan_entry(
+          &(target_l[bindex_id]),
+          &(target_r[bindex_id]),
+          search_cmd[bindex_id],
+          bindexs[bindex_id],
+          check_bitmap[bindex_id],
+          check_bitmap[0],
+          initial_data[bindex_id]);
     }
 
-    compare_bitmap(check_bitmap[0], h_result, bindexs[0]->length, raw_datas, bindex_num);
+    compare_bitmap(check_bitmap[0], bitmap[0], bindexs[0]->length, initial_data, bindex_num);
     printf("[CHECK]check final result done.\n\n");
 
-    cudaFreeHost(h_result);
+    for (int i = 0; i < bitmap_len; i++) {
+      if (bitmap[0][i] != 0) {
+        printf("[CHECK] not all 0!\n");
+        break;
+      }
+    }
   }
+
+  // CAUTION! MAX_VAL * selc doesn't strictly match the selectivity, so we reset target_numbers_l with sorted data to
+  // fix the selectivity
+  /* if (STRICT_SELECTIVITY) {
+    int n_selc = target_numbers_l.size();
+    target_numbers_l.clear();
+    for (int i = 0; i < n_selc - 1; i++) {
+      target_numbers_l.push_back(data_sorted[(int)(DATA_N * i / (n_selc - 1))]);
+    }
+    target_numbers_l.push_back(data_sorted[(int)DATA_N - 1]);
+  } */
 
   // clean jobs
   for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
     free(initial_data[bindex_id]);
-    free_bindex(bindexs[bindex_id], raw_datas[bindex_id]);
+    free_bindex(bindexs[bindex_id], initial_data[bindex_id]);
     free(bitmap[bindex_id]);
   }
+  // free(result1);
+  // free(result2);
 }
 
 int main(int argc, char *argv[]) { exp_opt(argc, argv); }

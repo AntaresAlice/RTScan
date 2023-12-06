@@ -1,22 +1,5 @@
 #include "bindex.h"
 
-void showGPUInfo() {
-    // int dev = 0;
-    
-    // cudaDeviceProp devProp;
-    // cudaGetDeviceProperties(&devProp, dev);
-    // cout << "GPU" << devProp.name << endl;
-    // cout << "SM的数量：" << devProp.multiProcessorCount << endl;
-    // cout << "每个线程块的共享内存大小：" << devProp.sharedMemPerBlock / 1024.0 << " KB" << endl;
-    // cout << "每个线程块的最大线程数：" << devProp.maxThreadsPerBlock << endl;
-    // cout << "每个SM的最大线程数：" << devProp.maxThreadsPerMultiProcessor << endl;
-    // cout << "每个SM的最大线程束数：" << devProp.maxThreadsPerMultiProcessor / 32 << endl;
-
-    // int num;
-    // cudaDeviceGetAttribute(&num, cudaDevAttrMaxThreadsPerMultiProcessor, dev);
-    // cout << "每个SM的最大线程数：" << num << endl;
-}
-
 
 //__global__ void refineKernel(BITS* bitmap, int offset)
 //{
@@ -92,6 +75,33 @@ void bitmap_memsetKernel(BITS* bitmap_a, BITS value, int n)
     int stride = blockDim.x * gridDim.x;
     for (int i = index; i < n; i += stride)
         bitmap_a[i] = value;
+}
+
+// refine, check block and set bitmap
+__global__
+void refineBlock(BITS *bitmap, POSTYPE *pos, CODE **raw_data, CODE *compares, int selected_id, int column_num, int n, bool inverse)
+{
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+    int j;
+    for (int i = index; i < n; i += stride) {
+        if (raw_data[selected_id][pos[i]] <= compares[selected_id * 2] || 
+            raw_data[selected_id][pos[i]] >= compares[selected_id * 2 + 1]) {
+            return;
+        }
+        for (j = 0; j < column_num; j++) {
+            if (j == selected_id) continue;
+            if (raw_data[j][pos[i]] <= compares[j * 2] || raw_data[j][pos[i]] >= compares[j * 2 + 1]) {
+                break;
+            }
+        }
+        if (j < column_num) continue; // Conditions not met
+        if (inverse) {
+            atomicAnd(&bitmap[(pos[i]) >> BITSSHIFT], ~(1U << (BITSWIDTH - 1 - (pos[i]) % BITSWIDTH)));
+        } else {
+            atomicOr(&bitmap[(pos[i]) >> BITSSHIFT], (1U << (BITSWIDTH - 1 - (pos[i]) % BITSWIDTH)));
+        }
+    }
 }
 
 class Block {
@@ -514,6 +524,311 @@ Error:
     // cudaFree(dev_bitmap_a);
     // cudaFree(dev_bitmap_b);
 
+    return cudaStatus;
+}
+
+cudaError_t GPURefineAreaWithCuda(BinDex **bindexs, BITS *dev_result_bitmap, CODE *predicate, int selected_id, int column_num, bool inverse)
+{
+    cudaError_t cudaStatus;
+
+    CODE **compares = (CODE **)malloc(column_num * sizeof(CODE *));
+    for (int i = 0; i < column_num; i++) {
+        compares[i] = &(predicate[i * 2]);
+    }
+
+#if DEBUG_INFO == 1 
+    for (int i = 0; i < column_num; i++) {
+        printf("[INFO] compares[%d][0] = %u, compares[%d][1] = %u\n", i, compares[i][0], i, compares[i][1]);
+    }
+#endif
+
+    CODE *dev_compares;
+    cudaStatus = cudaMalloc((void**)&(dev_compares), column_num * 2 * sizeof(CODE));
+    cudaStatus = cudaMemcpy(dev_compares, predicate, column_num * 2 * sizeof(CODE), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed when init dev compares!");
+        exit(-1);
+    }
+
+    CODE **dev_raw_data;
+    cudaStatus = cudaMalloc((void***)&(dev_raw_data), column_num * sizeof(CODE *));
+    for (int i = 0; i < column_num; i++) {
+        cudaStatus = cudaMemcpy(&(dev_raw_data[i]), &(bindexs[i]->rawDataInGPU), sizeof(CODE *), cudaMemcpyHostToDevice);
+    }
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed when init dev compares!");
+        exit(-1);
+    }
+
+    cudaStatus = cudaSetDevice(0);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
+        exit(-1);
+    }
+
+    CODE compare = compares[selected_id][1];
+    int areaIdx = in_which_area(bindexs[selected_id], compare);
+    if (bindexs[selected_id]->areaStartValues[areaIdx] == compare) {
+        compare = compares[selected_id][0];
+        areaIdx = in_which_area(bindexs[selected_id], compare);
+    }
+    int blockIdx = in_which_block(bindexs[selected_id]->areas[areaIdx], compare);
+    // printf("areaIdx: %d, blockIdx: %d, compare: %u\n", areaIdx, blockIdx, compare);
+    // printf("bindexs[%d]->areas[%d]->blocks[%d]->val[0] = %u\n", selected_id, areaIdx, blockIdx, bindexs[selected_id]->areas[areaIdx]->blocks[blockIdx]->val[0]);
+
+#if ONLY_REFINE == 1
+    for (int j = bindexs[selected_id]->areas[areaIdx]->blockNum - 1; j >= blockIdx; j--) {
+        dim3 blockSize(1024);
+        dim3 gridSize((bindexs[selected_id]->areas[areaIdx]->blocks[j]->length + blockSize.x - 1) / blockSize.x);
+        refineBlock<<<gridSize, blockSize>>>(dev_result_bitmap,
+                                             bindexs[selected_id]->areasInGPU[areaIdx]->blocks[j]->pos,
+                                             dev_raw_data,
+                                             dev_compares,
+                                             selected_id,
+                                             column_num,
+                                             bindexs[selected_id]->areas[areaIdx]->blocks[j]->length,
+                                             inverse);
+        cudaStatus = cudaGetLastError();
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "launch refine block failed: %s\n", cudaGetErrorString(cudaStatus));
+            exit(-1);
+            goto Error;
+        }
+    }
+#else
+    if (!inverse) {
+        for (int j = 0; j <= blockIdx; j++) { // only refine the bound area
+            // refine blocks[j]
+            dim3 blockSize(1024);
+            dim3 gridSize((bindexs[selected_id]->areas[areaIdx]->blocks[j]->length + blockSize.x - 1) / blockSize.x); 
+            refineBlock <<<gridSize, blockSize>>> (dev_result_bitmap, 
+                                                    bindexs[selected_id]->areasInGPU[areaIdx]->blocks[j]->pos,
+                                                    dev_raw_data,
+                                                    dev_compares,
+                                                    selected_id,
+                                                    column_num,
+                                                    bindexs[selected_id]->areas[areaIdx]->blocks[j]->length,
+                                                    inverse
+                                                    );
+            cudaStatus = cudaGetLastError();
+            if (cudaStatus != cudaSuccess) {
+                fprintf(stderr, "refine block failed: %s\n", cudaGetErrorString(cudaStatus));
+                exit(-1);
+                goto Error;
+            }
+        }
+    } 
+    else {
+        for (int j = bindexs[selected_id]->areas[areaIdx]->blockNum - 1; j >= blockIdx; j--) {
+            dim3 blockSize(1024);
+            dim3 gridSize((bindexs[selected_id]->areas[areaIdx]->blocks[j]->length + blockSize.x - 1) / blockSize.x);
+            // refine blocks[j]
+            // printf("[PreINFO] compare: %d %d\n",compares[selected_id][0],compares[selected_id][1]);
+            // int val1 = bindexs[selected_id]->areas[areaIdx]->blocks[j]->val[0];
+            // int val2 = bindexs[selected_id]->areas[areaIdx]->blocks[j]->val[bindexs[selected_id]->areas[areaIdx]->blocks[j]->length - 1];
+            // printf("[PreINFO] block %d : [%d,%d]\n",j, val1, val2);
+            // one refine scan three columns
+            refineBlock  <<<gridSize, blockSize>>> (dev_result_bitmap, 
+                                                    bindexs[selected_id]->areasInGPU[areaIdx]->blocks[j]->pos,
+                                                    dev_raw_data,
+                                                    dev_compares,
+                                                    selected_id,
+                                                    column_num,
+                                                    bindexs[selected_id]->areas[areaIdx]->blocks[j]->length,
+                                                    inverse
+                                                    );
+            // refineKernel <<<gridSize, blockSize>>> (dev_result_bitmap, bindexs[selected_id]->areas[areaIdx]->blocks[j]->length);
+            cudaStatus = cudaGetLastError();
+            if (cudaStatus != cudaSuccess) {
+                fprintf(stderr, "launch refine block failed: %s\n", cudaGetErrorString(cudaStatus));
+                exit(-1);
+                goto Error;
+            }
+        }
+    } 
+#endif
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching refineKernel!\n", cudaStatus);
+        goto Error;
+    }
+
+    if (DEBUG_INFO) printf("[INFO] refine done.\n");
+
+Error:
+    return cudaStatus;
+}
+
+cudaError_t GPURefineEqAreaWithCuda(BinDex **bindexs, BITS *dev_result_bitmap, CODE *predicate, int selected_id, int column_num, bool inverse)
+{
+    cudaError_t cudaStatus;
+
+    CODE **compares = (CODE **)malloc(column_num * sizeof(CODE *));
+    for (int i = 0; i < column_num; i++) {
+        compares[i] = &(predicate[i * 2]);
+    }
+
+    if (DEBUG_INFO) {
+        for (int i = 0; i < column_num; i++) {
+            printf("[INFO] compares[%d][0] = %u, compares[%d][1] = %u\n", i, compares[i][0], i, compares[i][1]);
+        }
+    }
+
+    CODE *dev_compares;
+    cudaStatus = cudaMalloc((void**)&(dev_compares), column_num * 2 * sizeof(CODE));
+    cudaStatus = cudaMemcpy(dev_compares, predicate, column_num * 2 * sizeof(CODE), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed when init dev compares!");
+        exit(-1);
+    }
+
+    CODE **dev_raw_data;
+    cudaStatus = cudaMalloc((void***)&(dev_raw_data), column_num * sizeof(CODE *));
+    for (int i = 0; i < column_num; i++) {
+        cudaStatus = cudaMemcpy(&(dev_raw_data[i]), &(bindexs[i]->rawDataInGPU), sizeof(CODE *), cudaMemcpyHostToDevice);
+    }
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed when init dev compares!");
+        exit(-1);
+    }
+
+    cudaStatus = cudaSetDevice(0);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
+        exit(-1);
+    }
+
+    CODE refineAreaLeft;
+    CODE refineAreaRight;
+    if (compares[selected_id][0] < compares[selected_id][1]) {
+        refineAreaLeft = compares[selected_id][0];
+        refineAreaRight = compares[selected_id][1];
+    }
+    else {
+        refineAreaLeft = compares[selected_id][1];
+        refineAreaRight = compares[selected_id][0];
+    }
+
+    printf("[selected_id]: %d\n", selected_id);
+    int areaIdxLeft = in_which_area(bindexs[selected_id], refineAreaLeft);
+    int areaIdxRight = in_which_area(bindexs[selected_id], refineAreaRight);
+    int blockIdxLeft, blockIdxRight;
+    if (areaIdxLeft >= 0) {
+        blockIdxLeft = in_which_block(bindexs[selected_id]->areas[areaIdxLeft], refineAreaLeft);
+    } 
+    blockIdxRight = in_which_block(bindexs[selected_id]->areas[areaIdxRight], refineAreaRight);
+
+    if (areaIdxLeft == areaIdxRight) {
+        // refine block from blockIdxLeft to blockIdxRight in area[areaIdxLeft]
+        for (int j = blockIdxLeft; j <= blockIdxRight; j++) {
+            dim3 blockSize(1024);
+            dim3 gridSize((bindexs[selected_id]->areas[areaIdxLeft]->blocks[j]->length + blockSize.x - 1) / blockSize.x); 
+            refineBlock  <<<gridSize, blockSize>>> (dev_result_bitmap, 
+                                                    bindexs[selected_id]->areasInGPU[areaIdxLeft]->blocks[j]->pos,
+                                                    dev_raw_data,
+                                                    dev_compares,
+                                                    selected_id,
+                                                    column_num,
+                                                    bindexs[selected_id]->areas[areaIdxLeft]->blocks[j]->length,
+                                                    inverse
+                                                    );
+            cudaStatus = cudaGetLastError();
+            if (cudaStatus != cudaSuccess) {
+                fprintf(stderr, "refine block failed: %s\n", cudaGetErrorString(cudaStatus));
+                exit(-1);
+                goto Error;
+            }
+        }
+        return cudaStatus;
+    }
+    else {
+        // refine block from blockIdxLeft to blockNum -1 in area[areaIdxLeft]
+        int blockCount = 0;
+        if (areaIdxLeft >= 0) {
+            if (DEBUG_INFO) {
+                blockCount += bindexs[selected_id]->areas[areaIdxLeft]->blockNum - blockIdxLeft;
+            }
+            for (int j = bindexs[selected_id]->areas[areaIdxLeft]->blockNum - 1; j >= blockIdxLeft; j--) {
+                dim3 blockSize(1024);
+                dim3 gridSize((bindexs[selected_id]->areas[areaIdxLeft]->blocks[j]->length + blockSize.x - 1) / blockSize.x);
+                refineBlock  <<<gridSize, blockSize>>> (dev_result_bitmap, 
+                                                        bindexs[selected_id]->areasInGPU[areaIdxLeft]->blocks[j]->pos,
+                                                        dev_raw_data,
+                                                        dev_compares,
+                                                        selected_id,
+                                                        column_num,
+                                                        bindexs[selected_id]->areas[areaIdxLeft]->blocks[j]->length,
+                                                        inverse
+                                                        );
+                cudaStatus = cudaGetLastError();
+                if (cudaStatus != cudaSuccess) {
+                    fprintf(stderr, "launch refine block failed: %s\n", cudaGetErrorString(cudaStatus));
+                    exit(-1);
+                    goto Error;
+                }
+            }
+        }
+        for (int i = areaIdxLeft + 1; i <= areaIdxRight - 1; i++) {
+            // refine block from 0 to blockNum -1 in area[areaIdxLeft]
+            if (DEBUG_INFO) {
+                blockCount += bindexs[selected_id]->areas[i]->blockNum;
+            }  
+            for (int j = bindexs[selected_id]->areas[i]->blockNum - 1; j >= 0; j--) {
+            dim3 blockSize(1024);
+            dim3 gridSize((bindexs[selected_id]->areas[i]->blocks[j]->length + blockSize.x - 1) / blockSize.x);
+            refineBlock  <<<gridSize, blockSize>>> (dev_result_bitmap, 
+                                                    bindexs[selected_id]->areasInGPU[i]->blocks[j]->pos,
+                                                    dev_raw_data,
+                                                    dev_compares,
+                                                    selected_id,
+                                                    column_num,
+                                                    bindexs[selected_id]->areas[i]->blocks[j]->length,
+                                                    inverse
+                                                    );
+            cudaStatus = cudaGetLastError();
+            if (cudaStatus != cudaSuccess) {
+                fprintf(stderr, "launch refine block failed: %s\n", cudaGetErrorString(cudaStatus));
+                exit(-1);
+                goto Error;
+            }
+        }
+        }
+        // TODO: refine other area between areaIdxLeft and areaIdxRight
+        // refine block from 0 to blockIdxRight in area[areaIdxRight]
+        if (DEBUG_INFO) {
+            blockCount += blockIdxRight;
+        }
+        for (int j = 0; j <= blockIdxRight; j++) {
+            dim3 blockSize(1024);
+            dim3 gridSize((bindexs[selected_id]->areas[areaIdxRight]->blocks[j]->length + blockSize.x - 1) / blockSize.x); 
+            refineBlock  <<<gridSize, blockSize>>> (dev_result_bitmap, 
+                                                    bindexs[selected_id]->areasInGPU[areaIdxRight]->blocks[j]->pos,
+                                                    dev_raw_data,
+                                                    dev_compares,
+                                                    selected_id,
+                                                    column_num,
+                                                    bindexs[selected_id]->areas[areaIdxRight]->blocks[j]->length,
+                                                    inverse
+                                                    );
+            cudaStatus = cudaGetLastError();
+            if (cudaStatus != cudaSuccess) {
+                fprintf(stderr, "refine block failed: %s\n", cudaGetErrorString(cudaStatus));
+                exit(-1);
+                goto Error;
+            }
+        }
+        printf("[CUDA Refine] %d blocks refined.\n", blockCount);
+    }
+
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching refineKernel!\n", cudaStatus);
+        goto Error;
+    }
+
+    if (DEBUG_INFO) printf("[INFO] refine done.\n");
+
+Error:
     return cudaStatus;
 }
 

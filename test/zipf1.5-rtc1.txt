@@ -1,0 +1,5 @@
+lt 59
+eq 0
+eq 0
+exit
+zipf 1.5 90%
