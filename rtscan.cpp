@@ -4,12 +4,6 @@ Timer timer;
 
 int prefetch_stride = 6;
 
-std::vector<CODE> target_numbers_l;  // left target numbers
-std::vector<CODE> target_numbers_r;  // right target numbers
-
-CODE *current_raw_data;
-std::mutex bitmapMutex;
-
 std::mutex scan_refine_mutex;
 int scan_refine_in_position;
 CODE scan_selected_compares[MAX_BINDEX_NUM][2];
@@ -44,8 +38,6 @@ std::vector<std::string> stringSplit(const std::string& str, char delim) {
                                    std::sregex_token_iterator());
     return elems;
 }
-
-void display_bitmap(BITS *bitmap, int bitmap_len);
 
 void start_timer(struct timeval* t) {
     gettimeofday(t, NULL);
@@ -120,14 +112,6 @@ void set_fv_val_less(BITS *bitmap, const CODE *val, CODE compare, POSTYPE n) {
     bitmap[i / BITSWIDTH] = gen_less_bits(val + i, compare, BITSWIDTH);
   }
   bitmap[i / BITSWIDTH] = gen_less_bits(val + i, compare, n - i);
-}
-
-inline POSTYPE num_insert_to_area(POSTYPE *areaStartIdx, int k, int n) {
-  if (k < K - 1) {
-    return areaStartIdx[k + 1] - areaStartIdx[k];
-  } else {
-    return n - areaStartIdx[k];
-  }
 }
 
 void init_bindex_in_GPU(BinDex *bindex, CODE *data, POSTYPE n, int bindex_id, POSTYPE *pos, CODE *data_sorted) {
@@ -366,14 +350,12 @@ int in_which_block(Area *area, CODE compare) {
 inline void refine(BITS *bitmap, POSTYPE pos) { bitmap[pos >> BITSSHIFT] ^= (1U << (BITSWIDTH - 1 - pos % BITSWIDTH)); }
 
 void refine_result_bitmap(BITS *bitmap_a, BITS *bitmap_b, int start_idx, int end_idx, int t_id) {
-
   cpu_set_t mask;
   CPU_ZERO(&mask);
   CPU_SET(t_id * 2, &mask);
   if (pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask) < 0) {
     fprintf(stderr, "set thread affinity failed\n");
   }
-  // int prefetch_stride = 6;
   int i;
   for (i = start_idx; i < end_idx; i++) {
     __sync_fetch_and_and(&bitmap_a[i], bitmap_b[i]);
@@ -452,7 +434,7 @@ void bindex_scan_lt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int b
   scan_refine_mutex.lock();
   if (inverse) {
     scan_selected_compares[bindex_id][0] = compare;
-    scan_selected_compares[bindex_id][1] = bindex->areaStartValues[area_idx + 1];  // TODO: must notice that this upper boundary cannot be reached, be careful in refine
+    scan_selected_compares[bindex_id][1] = bindex->areaStartValues[area_idx + 1];
   } else {
     scan_selected_compares[bindex_id][0] = bindex->areaStartValues[area_idx];
     scan_selected_compares[bindex_id][1] = compare;
@@ -637,16 +619,6 @@ void free_bindex(BinDex *bindex) {
   free(bindex);
 }
 
-uint32_t str2uint32(const char *s) {
-  uint32_t sum = 0;
-
-  while (*s) {
-    sum = sum * 10 + (*s++ - '0');
-  }
-
-  return sum;
-}
-
 std::vector<CODE> get_target_numbers(const char *s) {
   std::string input(s);
   std::stringstream ss(input);
@@ -654,7 +626,6 @@ std::vector<CODE> get_target_numbers(const char *s) {
   std::vector<CODE> result;
   while (std::getline(ss, value, ',')) {
     result.push_back((CODE)stod(value));
-    // result.push_back(str2uint32(value.c_str()));
   }
   return result;
 }
@@ -921,18 +892,6 @@ void special_eq_scan(CODE *target_l, CODE *target_r, BinDex **bindexs, BITS *dev
     refineWithOptix(dev_bitmap, dev_predicate, bindex_num, default_ray_length, default_ray_segment_num, false, direction, default_ray_mode);
   }
   if(DEBUG_TIME_COUNT) timer.commonGetEndTime(13);
-}
-
-int get_wide_face(double **compares, int bindex_num) {
-  double min_distance = compares[0][1] - compares[0][0];
-  int wide_face_id = 0;
-  for (int bindex_id = 1; bindex_id < bindex_num; bindex_id++) {
-    if (compares[bindex_id][1] - compares[bindex_id][0] < min_distance) {
-      min_distance = compares[bindex_id][1] - compares[bindex_id][0];
-      wide_face_id = bindex_id;
-    }
-  }
-  return wide_face_id;
 }
 
 int get_refine_space_side(double **compares, int bindex_num, int face_direction) {
@@ -1286,7 +1245,7 @@ int main(int argc, char *argv[]) {
   int insert_num = 0;
   int bindex_num = 3;
 
-  while ((opt = getopt(argc, argv, "khl:r:n:a:b:c:d:e:f:g:w:m:o:p:q:s:u:v:y:z:")) != -1) {
+  while ((opt = getopt(argc, argv, "ha:b:c:d:e:f:g:w:m:o:p:q:s:u:v:y:z:")) != -1) {
     switch (opt) {
       case 'h':
         printf(
@@ -1311,12 +1270,6 @@ int main(int argc, char *argv[]) {
             "[-z <face-direction-0=wide-1=narrow>]\n",
             argv[0]);
         exit(0);
-      case 'l':
-        target_numbers_l = get_target_numbers(optarg);
-        break;
-      case 'r':
-        target_numbers_r = get_target_numbers(optarg);
-        break;
       case 'o':
         strcpy(OPERATOR_TYPE, optarg);
         break;
@@ -1373,7 +1326,6 @@ int main(int argc, char *argv[]) {
         exit(-1);
     }
   }
-  assert(target_numbers_r.size() == 0 || target_numbers_l.size() == target_numbers_r.size());
   assert(blockNumMax);
   assert(bindex_num >= 1);
 

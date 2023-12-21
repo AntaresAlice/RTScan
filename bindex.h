@@ -60,7 +60,6 @@ typedef uint32_t CODE;
 #define MAXCODE ((1L << 32) - 1)
 #define MINCODE 0
 #define CODEWIDTH 32
-#define LOADSHIFT 0
 
 
 #define DEBUG_TIME_COUNT 1
