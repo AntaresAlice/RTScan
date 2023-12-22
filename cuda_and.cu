@@ -1,11 +1,5 @@
 #include "bindex.h"
 
-
-//__global__ void refineKernel(BITS* bitmap, int offset)
-//{
-//    int i = threadIdx.x;
-//    bitmap[(i + offset)>> BITSSHIFT] ^= (1U << (BITSWIDTH - 1 - (i + offset) % BITSWIDTH));
-//}
 __global__ 
 void refineKernel(BITS* bitmap, int n)
 {
@@ -310,7 +304,6 @@ cudaError_t GPUbitOrWithCuda(BITS* dev_bitmap_a, BITS* dev_bitmap_b, unsigned in
     dim3 gridSize((bitnum + blockSize.x - 1) / blockSize.x);
 
     // Choose which GPU to run on, change this on a multi-GPU system.
-    // TODO:maybe this should be used only once?
     cudaStatus = cudaSetDevice(0);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
@@ -353,7 +346,6 @@ cudaError_t GPUbitCopyWithCuda(BITS* dev_bitmap_a, BITS* dev_bitmap_b, unsigned 
     dim3 gridSize((bitnum + blockSize.x - 1) / blockSize.x);
 
     // Choose which GPU to run on, change this on a multi-GPU system.
-    // TODO:maybe this should be used only once?
     cudaStatus = cudaSetDevice(0);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
@@ -396,7 +388,6 @@ cudaError_t GPUbitCopyNegationWithCuda(BITS* dev_bitmap_a, BITS* dev_bitmap_b, u
     dim3 gridSize((bitnum + blockSize.x - 1) / blockSize.x);
 
     // Choose which GPU to run on, change this on a multi-GPU system.
-    // TODO:maybe this should be used only once?
     cudaStatus = cudaSetDevice(0);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
@@ -438,7 +429,6 @@ cudaError_t GPUbitCopySIMDWithCuda(BITS* result, BITS* dev_bitmap_a, BITS* dev_b
     dim3 gridSize((bitnum + blockSize.x - 1) / blockSize.x);
 
     // Choose which GPU to run on, change this on a multi-GPU system.
-    // TODO:maybe this should be used only once?
     cudaStatus = cudaSetDevice(0);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
@@ -484,7 +474,6 @@ cudaError_t GPUbitMemsetWithCuda(BITS* dev_bitmap_a, BITS value, unsigned int n)
     dim3 gridSize((bitnum + blockSize.x - 1) / blockSize.x);
 
     // Choose which GPU to run on, change this on a multi-GPU system.
-    // TODO:maybe this should be used only once?
     cudaStatus = cudaSetDevice(0);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
@@ -784,7 +773,6 @@ cudaError_t GPURefineEqAreaWithCuda(BinDex **bindexs, BITS *dev_result_bitmap, C
             }
         }
         }
-        // TODO: refine other area between areaIdxLeft and areaIdxRight
         // refine block from 0 to blockIdxRight in area[areaIdxRight]
         if (DEBUG_INFO) {
             blockCount += blockIdxRight;

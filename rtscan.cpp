@@ -1,8 +1,6 @@
-#include "bindex.h"
+#include "rt.h"
 
 Timer timer;
-
-int prefetch_stride = 6;
 
 std::mutex scan_refine_mutex;
 int scan_refine_in_position;
@@ -40,13 +38,13 @@ std::vector<std::string> stringSplit(const std::string& str, char delim) {
 }
 
 void start_timer(struct timeval* t) {
-    gettimeofday(t, NULL);
+  gettimeofday(t, NULL);
 }
 
 void stop_timer(struct timeval* t, double* elapsed_time) {
-    struct timeval end;
-    gettimeofday(&end, NULL);
-    *elapsed_time += (end.tv_sec - t->tv_sec) * 1000.0 + (end.tv_usec - t->tv_usec) / 1000.0;
+  struct timeval end;
+  gettimeofday(&end, NULL);
+  *elapsed_time += (end.tv_sec - t->tv_sec) * 1000.0 + (end.tv_usec - t->tv_usec) / 1000.0;
 }
 
 BITS gen_less_bits(const CODE *val, CODE compare, int n) {
@@ -59,51 +57,6 @@ BITS gen_less_bits(const CODE *val, CODE compare, int n) {
   }
   return result;
 }
-
-CODE block_start_value(pos_block *pb) { return pb->val[0]; }
-
-int insert_to_block_without_val(pos_block *pb, CODE *val_f, POSTYPE *pos_f, int n, CODE *raw_data) {
-  // Insert max(n, #vacancy) elements to a block, return 0 if the block is still
-  // not filled up.
-  if (DEBUG_TIME_COUNT) timer.commonGetStartTime(2);
-  int flagNum, length_new;
-  if ((n + pb->length) >= blockMaxSize) {
-    // Block filled up! This block will be splitted in insert_to_area(..)
-    flagNum = blockMaxSize - pb->length;  // The number of successfully inserted
-    // elements, flagNum will be return
-    length_new = blockMaxSize;
-  } else {
-    flagNum = 0;
-    length_new = pb->length + n;
-  }
-
-  // Separate insert to block
-  int insert_num = (flagNum > 0)?flagNum:n;
-  for (int j = 0; j < insert_num; j++){
-    int noflag = 0;
-    for (int i = 0; i < pb->length; i++) {
-      if (raw_data[pb->pos[i]] > val_f[j]) {
-        noflag = 1;
-        for (int k = pb->length; k > i; k--) {
-          pb->pos[k] = pb->pos[k-1];
-        }
-        pb->pos[i] = pos_f[j];
-        pb->length = pb->length + 1;
-        break;
-      }
-    }
-    if (!noflag) {
-      pb->pos[pb->length] = pos_f[j];
-      pb->length = pb->length + 1;
-    }
-  }
-  pb->length = length_new;
-
-  if (DEBUG_TIME_COUNT) timer.commonGetEndTime(2);
-  return flagNum;
-}
-
-CODE area_start_value(Area *area) { return area->blocks[0]->val[0]; }
 
 void set_fv_val_less(BITS *bitmap, const CODE *val, CODE compare, POSTYPE n) {
   // Set values for filter vectors
@@ -243,7 +196,7 @@ void memset_mt(BITS *p, int val, int n) {
   }
 }
 
-void copy_filter_vector_in_GPU(BinDex *bindex, BITS *dev_bitmap, int k, bool negation) {
+void copy_filter_vector_in_GPU(BinDex *bindex, BITS *dev_bitmap, int k, bool negation = false) {
   int bitmap_len = bits_num_needed(bindex->length);
 
   if (k < 0) {
@@ -307,44 +260,6 @@ void copy_filter_vector_bt_in_GPU(BinDex *bindex, BITS *result, int kl, int kr) 
   //   (result + mt_bitmap_n)[i] =
   //       (~((bindex->filterVectors[kl] + mt_bitmap_n)[i])) & ((bindex->filterVectors[kr] + mt_bitmap_n)[i]);
   // }
-}
-
-int in_which_area(BinDex *bindex, CODE compare) {
-  // Return the last area whose startValue is less than 'compare'
-  // Obviously here a naive linear search is enough
-  // Return -1 if 'compare' less than the first value in the virtual space
-  if (compare < area_start_value(bindex->areas[0])) return -1;
-  for (int i = 0; i < K; i++) {
-    CODE area_sv = area_start_value(bindex->areas[i]);
-    if (area_sv == compare) return i;
-    if (area_sv > compare) return i - 1;
-  }
-  return K - 1;
-}
-
-int in_which_block(Area *area, CODE compare) {
-  // Binary search here to find which block the value of compare should locate
-  // in (i.e. the last block whose startValue is less than 'compare')
-  assert(compare >= area_start_value(area));
-  int res = area->blockNum - 1;
-  for (int i = 0; i < area->blockNum; i++) {
-    CODE area_sv = block_start_value(area->blocks[i]);
-    if (area_sv == compare) {
-      res = i;
-      break;
-    }
-    if (area_sv > compare) {
-      res = i - 1;
-      break;
-    }
-  }
-  if (res) {
-    pos_block *pre_blk = area->blocks[res - 1];
-    if (pre_blk->val[pre_blk->length - 1] == compare) {
-      res--;
-    }
-  }
-  return res;
 }
 
 inline void refine(BITS *bitmap, POSTYPE pos) { bitmap[pos >> BITSSHIFT] ^= (1U << (BITSWIDTH - 1 - pos % BITSWIDTH)); }
@@ -596,21 +511,6 @@ void bindex_scan_eq_in_GPU(BinDex *bindex, BITS *result, CODE compare, int binde
   scan_refine_mutex.unlock();
 }
 
-void free_pos_block(pos_block *pb) {
-  free(pb->pos);
-  free(pb->val);
-
-  free(pb);
-}
-
-void free_area(Area *area) {
-  for (int i = 0; i < area->blockNum; i++) {
-    free_pos_block(area->blocks[i]);
-  }
-
-  free(area);
-}
-
 void free_bindex(BinDex *bindex) {
   // for (int i = 0; i < K - 1; i++) {
   //   free(bindex->filterVectors[i]);
@@ -688,7 +588,7 @@ void compare_bitmap(BITS *bitmap_a, BITS *bitmap_b, int len, CODE **raw_data, in
   return;
 }
 
-void raw_scan(BinDex *bindex, BITS *bitmap, CODE target1, CODE target2, OPERATOR OP, CODE *raw_data, BITS* compare_bitmap)
+void raw_scan(BinDex *bindex, BITS *bitmap, CODE target1, CODE target2, OPERATOR OP, CODE *raw_data, BITS* compare_bitmap = NULL)
 {
   for(int i = 0; i < bindex->length; i++) {
     bool hit = false;
@@ -1326,7 +1226,6 @@ int main(int argc, char *argv[]) {
         exit(-1);
     }
   }
-  assert(blockNumMax);
   assert(bindex_num >= 1);
 
   CODE *initial_data[MAX_BINDEX_NUM];

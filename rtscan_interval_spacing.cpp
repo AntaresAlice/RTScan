@@ -1,21 +1,9 @@
-#include "bindex.h"
-
-int prefetch_stride = 6;
-
-std::vector<CODE> target_numbers_l;  // left target numbers
-std::vector<CODE> target_numbers_r;  // right target numbers
-
-BITS* result1;
-BITS* result2;
-
-CODE* current_raw_data;
-std::mutex bitmapMutex;
+#include "rt.h"
 
 std::mutex scan_refine_mutex;
 int scan_refine_in_position;
 CODE scan_selected_compares[MAX_BINDEX_NUM][2];
 bool scan_skip_refine;
-// bool scan_use_special_compare;
 bool scan_skip_other_face[MAX_BINDEX_NUM];
 bool scan_skip_this_face[MAX_BINDEX_NUM];
 CODE scan_max_compares[MAX_BINDEX_NUM][2];
@@ -31,7 +19,6 @@ int ray_mode   = 0; // (0, cont), (1, space)
 double ray_interval_ratio;
 double ray_distance_ratio;
 
-// remember to free data ptr after using
 void getDataFromFile(char* DATA_PATH, CODE** initial_data, int bindex_num) {
     FILE* fp;
 
@@ -44,36 +31,8 @@ void getDataFromFile(char* DATA_PATH, CODE** initial_data, int bindex_num) {
     for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
         initial_data[bindex_id] = (CODE*)malloc(N * sizeof(CODE));
         CODE* data = initial_data[bindex_id];
-        // 8/16/32 only
-        if (CODEWIDTH == 8) {
-            uint8_t* file_data = (uint8_t*)malloc(N * sizeof(uint8_t));
-            if (fread(file_data, sizeof(uint8_t), N, fp) == 0) {
-                printf("init_data_from_file: fread faild.\n");
-                exit(-1);
-            }
-            for (int i = 0; i < N; i++)
-                data[i] = file_data[i];
-            free(file_data);
-        } else if (CODEWIDTH == 16) {
-            uint16_t* file_data = (uint16_t*)malloc(N * sizeof(uint16_t));
-            if (fread(file_data, sizeof(uint16_t), N, fp) == 0) {
-                printf("init_data_from_file: fread faild.\n");
-                exit(-1);
-            }
-            for (int i = 0; i < N; i++)
-                data[i] = file_data[i];
-            free(file_data);
-        } else if (CODEWIDTH == 32) {
-            uint32_t* file_data = (uint32_t*)malloc(N * sizeof(uint32_t));
-            if (fread(file_data, sizeof(uint32_t), N, fp) == 0) {
-                printf("init_data_from_file: fread faild.\n");
-                exit(-1);
-            }
-            for (int i = 0; i < N; i++)
-                data[i] = file_data[i];
-            free(file_data);
-        } else {
-            printf("init_data_from_file: CODE_WIDTH != 8/16/32.\n");
+        if (fread(data, sizeof(uint32_t), N, fp) == 0) {
+            printf("init_data_from_file: fread faild.\n");
             exit(-1);
         }
         printf("[CHECK] col %d  first num: %u  last num: %u\n", bindex_id, initial_data[bindex_id][0], initial_data[bindex_id][N - 1]);
@@ -84,14 +43,9 @@ int main(int argc, char* argv[]) {
     printf("N = %d\n", N);
     char opt;
     int selectivity;
-    CODE target1, target2;
     char DATA_PATH[256] = "\0";
     char SCAN_FILE[256] = "\0";
-    char OPERATOR_TYPE[5];
-    // int CODE_WIDTH = sizeof(CODE) *8;
-    int insert_num = 0;
     int bindex_num = 3;
-    bool USEKEYBOARDINPUT = false;
 
     density_width = 1200;
     density_height = 1200;  // maximum ray-width and maximum ray-height
@@ -100,15 +54,12 @@ int main(int argc, char* argv[]) {
     // get command line options
     bool TEST_INSERTING = false;
 
-    while ((opt = getopt(argc, argv, "khl:r:o:f:n:a:b:c:d:e:w:m:s:p:t:")) != -1) {
+    while ((opt = getopt(argc, argv, "hf:a:b:c:d:e:w:m:s:p:t:")) != -1) {
         switch (opt) {
             case 'h':
                 printf(
                     "Usage: %s \n"
-                    "[-l <left target list>] [-r <right target list>]\n"
-                    "[-p <prefetch-stride>]\n"
                     "[-f <input-file>]\n"
-                    "[-o <operator>]\n"
                     "[-w <ray-range-width>] [-m <ray-range-height>]\n"
                     "[-s <ray-segment-num>]\n"
                     "[-p <scan-predicate-file>]\n"
@@ -118,24 +69,14 @@ int main(int argc, char* argv[]) {
                     "[-d <ray-distance> - ratio]\n",
                     argv[0]);
                 exit(0);
-            case 'o':
-                strcpy(OPERATOR_TYPE, optarg);
-                break;
             case 'f':
                 strcpy(DATA_PATH, optarg);
-                break;
-            case 'n':
-                // DATA_N
-                insert_num = atoi(optarg);
                 break;
             case 'b':
                 bindex_num = atoi(optarg);
                 break;
             case 's':
                 default_ray_segment_num = atoi(optarg);
-                break;
-            case 'k':
-                USEKEYBOARDINPUT = true;
                 break;
             case 'w':
                 density_width = atoi(optarg);
@@ -163,30 +104,10 @@ int main(int argc, char* argv[]) {
                 exit(-1);
         }
     }
-    assert(target_numbers_r.size() == 0 || target_numbers_l.size() == target_numbers_r.size());
-    assert(blockNumMax);
     assert(bindex_num >= 1);
 
-    // initial data
     CODE* initial_data[MAX_BINDEX_NUM];
-
-    if (!strlen(DATA_PATH)) {
-        for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
-            initial_data[bindex_id] = (CODE*)malloc(N * sizeof(CODE));
-            CODE* data = initial_data[bindex_id];
-            printf("initing data by random\n");
-            std::random_device rd;
-            std::mt19937 mt(rd());
-            std::uniform_int_distribution<CODE> dist(MINCODE, MAXCODE);
-            CODE mask = ((uint64_t)1 << (sizeof(CODE) * 8)) - 1;
-            for (int i = 0; i < N; i++) {
-                data[i] = dist(mt) & mask;
-                assert(data[i] <= mask);
-            }
-        }
-    } else {
-        getDataFromFile(DATA_PATH, initial_data, bindex_num);
-    }
+    getDataFromFile(DATA_PATH, initial_data, bindex_num);
 
     CODE* range = (CODE*)malloc(sizeof(CODE) * 6);
     for (int i = 0; i < bindex_num; i++) {
