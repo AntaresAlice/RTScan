@@ -11,7 +11,7 @@ def RTScan_3c_unique_1e8():
         f'make rtscan DATA_N=1e8 DEBUG_ISHIT_CMP_RAY=0 DEBUG_INFO=0 DISTRIBUTION=0 ENCODE=0 BUILD_TYPE=Release')
     # ray_length = 1e8 / 90 = 1111111
     args = f'-b 3 -w 1200 -m 1200 -a 1111111 -z 1 -q 11 -p test/scan_cmd_1e8-3c.txt'
-    cmd = f"./rtscan {args} >> {output_file}"
+    cmd = f"./bin/rtscan {args} >> {output_file}"
     print(cmd)
     os.system(cmd)
 
@@ -24,7 +24,7 @@ def RTScan_1c_unique_1e8():
     density_list = [5e6] # approximate optimal configuration obtained from the experiment
     for density in density_list:
         args = f'-b 3 -w {density} -m {density} -s 1 -a -1 -u 1 -p test/scan_cmd_1e8-1c-rtscan.txt'
-        cmd = f"./rtc1 {args} >> {output_file}"
+        cmd = f"./bin/rtc1 {args} >> {output_file}"
         print(cmd)
         os.system(cmd)
         
@@ -36,7 +36,7 @@ def RTScan_2c_unique_1e8():
     density_list = [10000] # approximate optimal configuration obtained from the experiment
     for density in density_list:
         args = f'-b 2 -w {density} -m {density} -s 1 -p test/scan_cmd_1e8-2c.txt'
-        cmd = f"./rtscan_2c {args} >> {output_file}"
+        cmd = f"./bin/rtscan_2c {args} >> {output_file}"
         print(cmd)
         os.system(cmd)
 
@@ -48,7 +48,7 @@ def RTScan_3c_2p32_encode_1e8():
         f'make rtscan DATA_N=1e8 DEBUG_ISHIT_CMP_RAY=0 DEBUG_INFO=0 DISTRIBUTION=0 ENCODE=1 BUILD_TYPE=Release')
     # ray_length = 1e8 / 90 = 1111111
     args = f'-b 3 -w 1200 -m 1200 -a 1111111 -z 1 -q 11 -p test/scan_cmd_32.txt -f data/uniform_data_1e8_3.dat'
-    cmd = f"./rtscan {args} >> {output_file}"
+    cmd = f"./bin/rtscan {args} >> {output_file}"
     print(cmd)
     os.system(cmd)
 
@@ -60,7 +60,7 @@ def RTScan_3c_zipf_encode_1e8():
         f'make rtscan DATA_N=1e8 DEBUG_ISHIT_CMP_RAY=0 DEBUG_INFO=0 DISTRIBUTION=0 ENCODE=1 BUILD_TYPE=Release')
     # ray_length = 1e8 / 90 = 1111111
     args = f'-b 3 -w 1200 -m 1200 -a 1111111 -z 1 -q 1 -p test/zipf1.5.txt -f data/zipf1.5_data_1e8_3.dat'
-    cmd = f"./rtscan {args} >> {output_file}"
+    cmd = f"./bin/rtscan {args} >> {output_file}"
     print(cmd)
     os.system(cmd)
     
@@ -80,7 +80,7 @@ def RTScan_3c_skewed(encode=1):
     for i in range(len(input_file_list)):
         # args = f'-b 3 -w 1200 -m 1200 -a 1120000 -y 1 -q 1 -p {scan_file_list[i]}'
         args = f'-b 3 -w 1200 -m 1200 -a 1111111 -y 1 -q 1 -p {scan_file_list[i]}'
-        cmd = f"./rtscan {args} -f {input_file_list[i]} >> {output_file}"
+        cmd = f"./bin/rtscan {args} -f {input_file_list[i]} >> {output_file}"
         print(cmd)
         os.system(cmd)
 
@@ -102,7 +102,7 @@ def RTScan_3c_2p6():
             for density in density_list[k]:
                 for segment in segment_num_list[k]:
                     args = f'-b 3 -a -2 -s {segment} -m {density} -w {density} -d {data_range_list[k]},{data_range_list[k]},{data_range_list[k]} -z {direction} -v -1 -y 1 -q 11 -g 1 -p test/scan_cmd_2p6.txt'
-                    cmd = "./rtscan " + args + " >> " + output_file
+                    cmd = "./bin/rtscan " + args + " >> " + output_file
                     print(cmd)
                     os.system(cmd)
 
@@ -125,7 +125,7 @@ def RTScan_3c_2p6_encoding_old():
             for density in density_list[k]:
                 for segment in segment_num_list[k]:
                     args = f'-b 3 -a -2 -s {segment} -m {density} -w {density} -d {data_range_list[k]},{data_range_list[k]},{data_range_list[k]} -z {direction} -y 1 -q 11 -g 1 -p test/scan_cmd_2p6.txt'
-                    cmd = "./rtscan " + args + " >> " + output_file
+                    cmd = "./bin/rtscan " + args + " >> " + output_file
                     print(cmd)
                     os.system(cmd)
                     
@@ -144,7 +144,7 @@ def RTScan_3c_2p6_encoding():
         for direction in direction_list:
             for density in density_list[k]:
                 args = f'-b 3 -a -2 -m {density} -w {density} -d {data_range_list[k]},{data_range_list[k]},{data_range_list[k]} -z {direction} -y 1 -q 11 -g 1 -p test/scan_cmd_2p6.txt'
-                cmd = "./rtscan " + args + " >> " + output_file
+                cmd = "./bin/rtscan " + args + " >> " + output_file
                 print(cmd)
                 os.system(cmd)
 
@@ -156,7 +156,7 @@ def RTScan_3c_sieving_vectors_64():
         os.system('make clean')
         os.system(f'make rtscan DATA_N=1e8 VAREA_N={sieve} PRIMITIVE_TYPE=2 DEBUG_ISHIT_CMP_RAY=0 DEBUG_INFO=0 DISTRIBUTION=0 ENCODE=0')
         args = f'-b 3 -w 1200 -m 1200 -a 1111111 -z 1 -q 11 -p test/scan_cmd_1e8-3c.txt'
-        cmd = f"./rtscan {args} >> {output_file}"
+        cmd = f"./bin/rtscan {args} >> {output_file}"
         print(cmd)
         os.system(cmd)
 
@@ -168,7 +168,7 @@ def RTScan_3c_vary_sieving_vectors():
         os.system('make clean')
         os.system(f'make rtscan DATA_N=1e8 VAREA_N={sieve} PRIMITIVE_TYPE=2 DEBUG_ISHIT_CMP_RAY=1 DEBUG_INFO=1 DISTRIBUTION=0')
         args = f"-b 3 -w 1200 -m 1200 -a 48000000 -e 1 -c 1 -q 11 -p test/scan_cmd_32_3c.txt"
-        cmd = f"./rtscan {args} -f data/uniform_data_1e8_3.dat >> {output_file}"
+        cmd = f"./bin/rtscan {args} -f data/uniform_data_1e8_3.dat >> {output_file}"
         print(cmd)
         os.system(cmd)
         
@@ -183,7 +183,7 @@ def RTScan_3c_vary_interval_spacing():
         for spacing_ratio in ray_spacing_ratio_list:
             # 48000000 6000000
             args = f'-b 3 -w 1200 -m 1200 -a 6000000 -e 1 -c {interval_ratio} -d {spacing_ratio}'
-            cmd = f"./rtscan_interval_spacing {args} -f data/uniform_data_1e8_3.dat >> {output_file}" 
+            cmd = f"./bin/rtscan_interval_spacing {args} -f data/uniform_data_1e8_3.dat >> {output_file}" 
             print(cmd)
             os.system(cmd)
 
@@ -194,7 +194,7 @@ def BinDexCUDA_uniform(column_num=3):
     output_file = f"log/cuda/column{column_num}/{logtime}-1e8-{column_num}c-cuda.log"
     args = f"-b {column_num} -p test/scan_cmd_32_{column_num}c.txt"
     data_file = 'data/uniform_data_1e8_3.dat' if column_num <= 3 else 'data/uniform_data_1e8_4.dat'
-    cmd = f"./bindex_cuda {args} -f {data_file} >> {output_file}"
+    cmd = f"./bin/bindex_cuda {args} -f {data_file} >> {output_file}"
     print(cmd)
     os.system(cmd)
 
@@ -212,7 +212,7 @@ def BinDexCUDA_skewed():
                       'test/normal.txt']
     output_file = f"log/cuda/skew/{logtime}-1e8-3c-skew_selec0.9.log"
     for j in range(len(input_file_list)):
-        cmd = f"./bindex_cuda -b 3 -p {scan_file_list[j]} -f {input_file_list[j]} >> {output_file}"
+        cmd = f"./bin/bindex_cuda -b 3 -p {scan_file_list[j]} -f {input_file_list[j]} >> {output_file}"
         print(cmd)
         os.system(cmd)
 
@@ -222,7 +222,7 @@ def BinDexCUDA_index_overhead(): # same as BinDex
     os.system(f'make bindex_cuda DATA_N=1e8 ONLY_REFINE=0 ONLY_DATA_SIEVING=0')
     output_file = f"log/cuda/index_overhead/{logtime}-cuda-zipf1.5.log"
     args = f"-b 3 -p test/zipf1.5.txt -f data/zipf1.5_data_1e8_3.dat"
-    cmd = f"./bindex_cuda {args} >> {output_file}"
+    cmd = f"./bin/bindex_cuda {args} >> {output_file}"
     print(cmd)
     os.system(cmd)
 
@@ -232,7 +232,7 @@ def BinDex_uniform_2p32(column_num=3):
     os.system('make bindex DATA_N=1e8 VAREA_N=128')
     output_file = f"log/bindex/{logtime}-uniform2p32-{column_num}c.log"
     args = f"-b {column_num} -p test/scan_cmd_32_{column_num}c.txt"
-    cmd = f"./bindex {args} -f data/uniform_data_1e8_3.dat >> {output_file}" 
+    cmd = f"./bin/bindex {args} -f data/uniform_data_1e8_3.dat >> {output_file}" 
     print(cmd)
     os.system(cmd)
 
@@ -250,7 +250,7 @@ def BinDex_skewed():
                       'test/normal.txt']
     output_file = f"log/bindex/{logtime}-skew_selec0.9.log"
     for j in range(len(input_file_list)):
-        cmd = f"./bindex -b 3 -p {scan_file_list[j]} -f {input_file_list[j]} >> {output_file}"
+        cmd = f"./bin/bindex -b 3 -p {scan_file_list[j]} -f {input_file_list[j]} >> {output_file}"
         print(cmd)
         os.system(cmd)
 
@@ -262,7 +262,7 @@ def RTc3_2p32():
     os.system(f'make rtc3 DATA_N=1e8 DEBUG_ISHIT_CMP_RAY=0 DEBUG_INFO=0 DISTRIBUTION=0 BUILD_TYPE=Release')
     for density in ray_density_list:
         args = f'-b 3 -w {density} -m {density} -s 1 -a -1 -z 1 -p test/scan_cmd_32_3c.txt -q 11'
-        cmd = f"./rtc3 {args} -f data/uniform_data_1e8_3.dat >> {output_file}"
+        cmd = f"./bin/rtc3 {args} -f data/uniform_data_1e8_3.dat >> {output_file}"
         print(cmd)
         os.system(cmd)
         
@@ -287,7 +287,7 @@ def RTc3_skewed():
         for density in density_list[i]:
             for j in range(len(input_file_list)):
                 args = f'-b 3 -w {density} -m {density} -s 1 -a -1 -v {data_range_list[i]},{data_range_list[i]},{data_range_list[i]} -z 1 -p {scan_file_list[j]} -q 1'
-                cmd = f"./rtc3 {args} -f {input_file_list[j]} >> {output_file}"
+                cmd = f"./bin/rtc3 {args} -f {input_file_list[j]} >> {output_file}"
                 print(cmd)
                 os.system(cmd)
 
@@ -306,7 +306,7 @@ def RTc3_2p6():
             print(density)
             args = f'-b 3 -w {density} -m {density} -s 1 -a -1 -v {data_range_list[i]},{data_range_list[i]},{data_range_list[i]} -z 0 -q 11 -g 1'
             # cmd = "./bindex " + args + " -f data/uniform_data_1e8_3.dat >> " + output_file
-            cmd = "./rtc3 " + args + " >> " + output_file
+            cmd = "./bin/rtc3 " + args + " >> " + output_file
             print(cmd)
             os.system(cmd)
 
@@ -318,7 +318,7 @@ def RTc1_1c_2p32(): # use `eq` to scan one column
     os.system('make rtc1 DATA_N=1e8 DEBUG_ISHIT_CMP_RAY=0 DEBUG_INFO=0 DISTRIBUTION=0 PRIMITIVE_TYPE=0 BUILD_TYPE=Release')
     for i in range(len(ray_density)):
         args = f'-b 3 -w {ray_density[i]} -m {ray_density[i]} -s 1 -a -1 -u 0 -p test/scan_cmd_32_1c-rtc1.txt'
-        cmd = "./rtc1 " + args + " -f data/uniform_data_1e8_3.dat >> " + output_file
+        cmd = "./bin/rtc1 " + args + " -f data/uniform_data_1e8_3.dat >> " + output_file
         print(cmd)
         os.system(cmd)
 
@@ -337,7 +337,7 @@ def RTc1_skewed():
     os.system('make rtc1 DATA_N=1e8 DEBUG_ISHIT_CMP_RAY=0 DEBUG_INFO=0 DISTRIBUTION=0 PRIMITIVE_TYPE=0 BUILD_TYPE=Release')
     for i in range(len(input_file_list)):
         args = f'-b 3 -w 18000 -m 18000 -s 1 -a -1 -u 0 -q 1 -p {scan_file_list[i]}'
-        cmd = f"./rtc1 {args} -f {input_file_list[i]} >> {output_file}"
+        cmd = f"./bin/rtc1 {args} -f {input_file_list[i]} >> {output_file}"
         print(cmd)
         os.system(cmd)
 

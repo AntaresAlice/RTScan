@@ -60,38 +60,38 @@ else
 	GPLUS = 
 endif
 
-rtscan: rtscan.cpp remap.cpp rt.h librt_cuda.a timer.h $(optix-lib)/liboptixScan.a
-	g++ -std=c++11 $^ -o $@ $(LDFLAGS) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DENCODE=$(ENCODE) -DTPCH=$(TPCH) -DVAREA_N=$(VAREA_N) -DDISTRIBUTION=$(DISTRIBUTION) $(GPLUS)
+rtscan: rtscan.cpp remap.cpp rt.h ./bin/librt_cuda.a timer.h $(optix-lib)/liboptixScan.a
+	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DENCODE=$(ENCODE) -DTPCH=$(TPCH) -DVAREA_N=$(VAREA_N) -DDISTRIBUTION=$(DISTRIBUTION) $(GPLUS)
 
-rtscan_2c: rtscan_2c.cpp rt.h librt_cuda.a timer.h $(optix-lib)/librtscan_2c.a
-	g++ -std=c++11 $^ -o $@ $(LDFLAGS-rtscan-2c) -mavx2 -march=native -DD_GLIBCXX_PARALLEL
+rtscan_2c: rtscan_2c.cpp rt.h ./bin/librt_cuda.a timer.h $(optix-lib)/librtscan_2c.a
+	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS-rtscan-2c) -mavx2 -march=native -DD_GLIBCXX_PARALLEL
 
 rtscan_interval_spacing: rtscan_interval_spacing.cpp rt.h timer.h $(optix-lib)/librtscan_interval_spacing.a
-	g++ -std=c++11 $^ -o $@ $(LDFLAGS-rtscan-interval-spacing) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N)
+	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS-rtscan-interval-spacing) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N)
 
-bindex_cuda: bindex_cuda.cpp bindex.h libcuda_and.a timer.h
-	g++ -std=c++11 $^ -o $@ libcuda_and.a -ldl -pthread -fopenmp -lcudart -lcuda -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DONLY_REFINE=$(ONLY_REFINE) -DONLY_DATA_SIEVING=$(ONLY_DATA_SIEVING)
+bindex_cuda: bindex_cuda.cpp bindex.h ./bin/libcuda_and.a timer.h
+	g++ -std=c++11 $^ -o ./bin/$@ -ldl -pthread -fopenmp -lcudart -lcuda -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DONLY_REFINE=$(ONLY_REFINE) -DONLY_DATA_SIEVING=$(ONLY_DATA_SIEVING)
 
 bindex: bindex.cpp
-	g++ -std=c++11 $^ -o $@ -pthread -mavx2 -march=native -fopenmp -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DVAREA_N=$(VAREA_N)
+	g++ -std=c++11 $^ -o ./bin/$@ -pthread -mavx2 -march=native -fopenmp -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DVAREA_N=$(VAREA_N)
 
-rtc3: rtc3.cpp remap.cpp rt.h librt_cuda.a timer.h $(optix-lib)/librtc3.a
-	g++ -std=c++11 $^ -o $@ $(LDFLAGS-rtc3) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DENCODE=$(ENCODE) -DDISTRIBUTION=$(DISTRIBUTION) $(GPLUS)
+rtc3: rtc3.cpp remap.cpp rt.h ./bin/librt_cuda.a timer.h $(optix-lib)/librtc3.a
+	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS-rtc3) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DENCODE=$(ENCODE) -DDISTRIBUTION=$(DISTRIBUTION) $(GPLUS)
 
-rtc1: rtc1.cpp rt.h librt_cuda.a timer.h $(optix-lib)/librtc1.a
-	g++ -std=c++11 $^ -o $@ $(LDFLAGS-rtc1) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DDISTRIBUTION=$(DISTRIBUTION) $(GPLUS)
+rtc1: rtc1.cpp rt.h ./bin/librt_cuda.a timer.h $(optix-lib)/librtc1.a
+	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS-rtc1) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DDISTRIBUTION=$(DISTRIBUTION) $(GPLUS)
 
-rt_cuda.o: rt_cuda.cu
-	nvcc -c rt_cuda.cu -o rt_cuda.o -DDATA_N=$(DATA_N) $(GPLUS)
+./bin/rt_cuda.o: rt_cuda.cu
+	nvcc -c $^ -o $@ -DDATA_N=$(DATA_N) $(GPLUS)
 
-librt_cuda.a: rt_cuda.o
-	ar cr librt_cuda.a rt_cuda.o
+./bin/librt_cuda.a: ./bin/rt_cuda.o
+	ar cr $@ $^
 
-cuda_and.o: cuda_and.cu
-	nvcc -c cuda_and.cu -o cuda_and.o -DDATA_N=$(DATA_N) $(GPLUS)
+./bin/cuda_and.o: cuda_and.cu
+	nvcc -c $^ -o $@ -DDATA_N=$(DATA_N) $(GPLUS)
 
-libcuda_and.a: cuda_and.o
-	ar cr libcuda_and.a cuda_and.o
+./bin/libcuda_and.a: ./bin/cuda_and.o
+	ar cr $@ $^
 
 $(optix-lib)/libsutil_7_sdk.so $(optix-lib)/liboptixScan.a $(optix-lib)/librtc3.a $(optix-lib)/librtc1.a $(optix-lib)/librtscan_2c.a $(optix-lib)/librtscan_interval_spacing.a: \
 $(rt-scan-srcs) $(rtc3-srcs) $(rtc1-srcs) $(rtscan-2c-srcs) $(rtscan-interval-spacing-srcs)
@@ -100,10 +100,4 @@ $(rt-scan-srcs) $(rtc3-srcs) $(rtc1-srcs) $(rtscan-2c-srcs) $(rtscan-interval-sp
 	make
 
 clean:
-	rm -rf rtscan rtscan_2c rtscan_interval_spacing bindex bindex_cuda rtc1 rtc3 cuda_and.o libcuda_and.a rt_cuda.o librt_cuda.a optix-scan/build/*
-
-clean-bindex:
-	rm -rf bindex cuda_and.o libcuda_and.a
-
-clean-rtscan:
-	rm -rf $(optix-lib)
+	rm -rf ./bin/* optix-scan/build/*
