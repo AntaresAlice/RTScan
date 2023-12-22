@@ -113,10 +113,7 @@ extern map<CODE, CODE> encodeMap[MAX_BINDEX_NUM];
 typedef struct {
   // Struct for a position block
   POSTYPE *pos;  // Position array in a block
-  CODE *val;     // Sorted codes in a block TODO: needed to be
-  // removed in future implementation for saving
-  // space (emmmm... actually we don't need
-  // to remove it for experimental evaluations).
+  CODE *val;     // Sorted codes in a block
   int length;
 } pos_block;
 
@@ -184,29 +181,4 @@ cudaError_t GPURefineAreaWithCuda(BinDex **bindexs, BITS *dev_result_bitmap, COD
 cudaError_t GPURefineEqAreaWithCuda(BinDex **bindexs, BITS *dev_result_bitmap, CODE *predicate, int selected_id, int column_num = 3, bool inverse = false);
 int in_which_area(BinDex *bindex, CODE compare);
 int in_which_block(Area *area, CODE compare);
-
-
-void initializeOptix(CODE **raw_data, int length, int density_width, int density_height, int column_num, CODE* range, 
-                     int cube_width);
-void refineWithOptix(BITS *dev_result_bitmap, double *predicate, int column_num,
-                     int ray_length = -1, int ray_segment_num = 10, bool inverse = false, int direction = 2, int ray_mode = 0);
-
-void initializeOptixRTc3(CODE **raw_data, int length, int density_width, int density_height, int column_num, 
-                         CODE *range, uint32_t cube_width, int direction);
-void refineWithOptixRTc3(BITS *dev_result_bitmap, double *predicate, int column_num, 
-                            int ray_length = -1, int ray_segment_num = 10, bool inverse = false, int direction = 2, int ray_mode = 0);
-
-void initializeOptixRTc1(CODE **raw_data, int length, int density_width, int density_height, int column_num, CODE* range, int cube_width_factor,
-                         int ray_interval, int prim_size);
-void refineWithOptixRTc1(BITS *dev_result_bitmap, double *predicate, int column_num,
-                         int ray_length = -1, int ray_segment_num = 10, bool inverse = false, int direction = 2, int ray_mode = 0);
-
-void initializeOptixRTScan_2c(CODE **raw_data, int length, int density_width, int density_height, int column_num = 3);
-void refineWithOptixRTScan_2c(BITS *dev_result_bitmap, double *predicate, unsigned *range, 
-                              int column_num, int ray_segment_num = 1, bool inverse = false);
-
-void initializeOptixRTScan_interval_spacing(CODE **raw_data, int length, int density_width, int density_height, int column_num, CODE* range, double ray_interval_ratio);
-void refineWithOptixRTScan_interval_spacing(BITS *dev_result_bitmap, double *predicate, int column_num,
-                                            int ray_length, int ray_segment_num, bool inverse, int direction, int ray_mode,
-                                            double ray_distance_ratio);
 #endif
