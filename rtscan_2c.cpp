@@ -490,28 +490,27 @@ void raw_scan_entry(std::vector<CODE>* target_l, std::vector<CODE>* target_r, st
       } else if (search_cmd == "bt") {
         raw_scan(bindex, bitmap, target1, target2, BT, raw_data);
       }
-
-      printf("\n");
     }
   }
-  // CPU merge
-  int stride = 156250;
-  if (N / stride / CODEWIDTH > THREAD_NUM) {
-    stride = N / THREAD_NUM / CODEWIDTH;
-    printf("No enough threads, set stride to %d\n", stride);
-  }
+  
+  int max_idx = (N + CODEWIDTH - 1) / CODEWIDTH;
+  int stride = (max_idx + THREAD_NUM - 1) / THREAD_NUM;
 
   if (mergeBitmap != bitmap) {
     std::thread threads[THREAD_NUM];
     int start_idx = 0;
     int end_idx = 0;
     size_t t_id = 0;
-    while (end_idx < N && t_id < THREAD_NUM) {
+    while (end_idx < max_idx && t_id < THREAD_NUM) {
       end_idx = start_idx + stride;
-      if (end_idx > N) {
-        end_idx = N;
+      if (end_idx > max_idx) {
+        end_idx = max_idx;
       }
-      threads[t_id] = std::thread(refine_result_bitmap, mergeBitmap, bitmap, start_idx, end_idx, t_id);
+      threads[t_id] = std::thread(
+        refine_result_bitmap, 
+        mergeBitmap, bitmap, 
+        start_idx, end_idx, t_id
+      );
       start_idx += stride;
       t_id += 1;
     }

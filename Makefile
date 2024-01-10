@@ -64,7 +64,7 @@ rtscan: rtscan.cpp remap.cpp rt.h ./bin/librt_cuda.a timer.h $(optix-lib)/libopt
 	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DENCODE=$(ENCODE) -DTPCH=$(TPCH) -DVAREA_N=$(VAREA_N) -DDISTRIBUTION=$(DISTRIBUTION) $(GPLUS)
 
 rtscan_2c: rtscan_2c.cpp rt.h ./bin/librt_cuda.a timer.h $(optix-lib)/librtscan_2c.a
-	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS-rtscan-2c) -mavx2 -march=native -DD_GLIBCXX_PARALLEL
+	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS-rtscan-2c) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N)
 
 rtscan_interval_spacing: rtscan_interval_spacing.cpp rt.h timer.h $(optix-lib)/librtscan_interval_spacing.a
 	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS-rtscan-interval-spacing) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N)
