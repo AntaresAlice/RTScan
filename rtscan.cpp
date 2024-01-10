@@ -99,7 +99,7 @@ void init_bindex_in_GPU(BinDex *bindex, CODE *data, POSTYPE n, int bindex_id, PO
 
   bindex->data_min = data_sorted[0];
   bindex->data_max = data_sorted[bindex->length - 1];
-
+  
   printf("Bindex data min: %u  max: %u\n", bindex->data_min, bindex->data_max);
 
   bindex->areaStartValues[0] = data_sorted[0];
@@ -249,17 +249,6 @@ void copy_filter_vector_bt_in_GPU(BinDex *bindex, BITS *result, int kl, int kr) 
                          bindex->filterVectorsInGPU[kl], 
                          bindex->filterVectorsInGPU[kr],
                          bitmap_len);
-
-  // simd copy_bt
-  // int mt_bitmap_n = (bitmap_len / SIMD_JOB_UNIT) * SIMD_JOB_UNIT;  // must be SIMD_JOB_UNIT aligened
-  // for (int i = 0; i < THREAD_NUM; i++)
-  //   threads[i] =
-  //       std::thread(copy_bitmap_bt_simd, result, bindex->filterVectors[kl], bindex->filterVectors[kr], mt_bitmap_n, i);
-  // for (int i = 0; i < THREAD_NUM; i++) threads[i].join();
-  // for (int i = 0; i < bitmap_len - mt_bitmap_n; i++) {
-  //   (result + mt_bitmap_n)[i] =
-  //       (~((bindex->filterVectors[kl] + mt_bitmap_n)[i])) & ((bindex->filterVectors[kr] + mt_bitmap_n)[i]);
-  // }
 }
 
 inline void refine(BITS *bitmap, POSTYPE pos) { bitmap[pos >> BITSSHIFT] ^= (1U << (BITSWIDTH - 1 - pos % BITSWIDTH)); }
@@ -382,7 +371,7 @@ void bindex_scan_gt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int b
   // set common compare here for use in refine
   scan_max_compares[bindex_id][0] = compare;
   scan_max_compares[bindex_id][1] = bindex->data_max;
-
+  
   // handle some boundary problems: <0, ==0, K-1, >K-1 (just like lt)
   // <0: set all bits to 1. skip this face: CS[this bindex] x CM[other bindexs]
   // ==0: may not cause problem here?
@@ -407,14 +396,11 @@ void bindex_scan_gt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int b
       scan_refine_in_position += 1;
     }
     scan_refine_mutex.unlock();
-    
     return;
   }
   
   if (area_idx < 0) {
     // 'compare' less than all raw_data, return all 1 result
-    // BITS* result = (BITS*)malloc(sizeof(BITS) * bitmap_len);
-
     scan_refine_mutex.lock();
     if(!scan_skip_refine) {
       scan_skip_this_face[bindex_id] = true;
@@ -423,15 +409,10 @@ void bindex_scan_gt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int b
       scan_refine_in_position += 1;
     }
     scan_refine_mutex.unlock();
-
-    // cudaMemset(dev_bitmap, 0xFF, bitmap_len);
-
     return;
   }
 
-
   // set refine compares here
-  // scan_refine_mutex.lock();
   scan_refine_mutex.lock();
   scan_selected_compares[bindex_id][0] = compare;
   if (area_idx + 1 < K)
@@ -512,10 +493,6 @@ void bindex_scan_eq_in_GPU(BinDex *bindex, BITS *result, CODE compare, int binde
 }
 
 void free_bindex(BinDex *bindex) {
-  // for (int i = 0; i < K - 1; i++) {
-  //   free(bindex->filterVectors[i]);
-  // }
-
   free(bindex);
 }
 
@@ -1391,27 +1368,27 @@ int main(int argc, char *argv[]) {
         if (cmds[0] == "exit") exit(0);
         search_cmd[i * bindex_num + bindex_id] = cmds[0];
         if (cmds.size() > 1) {
-          if (ENCODE) {
-            timer.commonGetStartTime(16);
-            target_lower[i * bindex_num + bindex_id] = encodeQuery(bindex_id, get_target_numbers(cmds[1])[0]);
-            timer.commonGetEndTime(16);
-            printf("[ENCODE] %u", target_lower[i * bindex_num + bindex_id]);
-          } else {
-            target_lower[i * bindex_num + bindex_id] = get_target_numbers(cmds[1])[0];
-          }
+if (ENCODE) {
+          timer.commonGetStartTime(16);
+          target_lower[i * bindex_num + bindex_id] = encodeQuery(bindex_id, get_target_numbers(cmds[1])[0]);
+          timer.commonGetEndTime(16);
+          printf("[ENCODE] %u", target_lower[i * bindex_num + bindex_id]);
+} else {
+          target_lower[i * bindex_num + bindex_id] = get_target_numbers(cmds[1])[0];
+}
         }
         if (cmds.size() > 2) {
-          if (ENCODE) {
-            timer.commonGetStartTime(16);
-            target_upper[i * bindex_num + bindex_id] = encodeQuery(bindex_id, get_target_numbers(cmds[2])[0]);
-            timer.commonGetEndTime(16);
-            printf(" %u", target_upper[i * bindex_num + bindex_id]);
-          } else {
-            target_upper[i * bindex_num + bindex_id] = get_target_numbers(cmds[2])[0];
-          }
+if (ENCODE) {
+          timer.commonGetStartTime(16);
+          target_upper[i * bindex_num + bindex_id] = encodeQuery(bindex_id, get_target_numbers(cmds[2])[0]);
+          timer.commonGetEndTime(16);
+          printf(" %u", target_upper[i * bindex_num + bindex_id]);
+} else {
+          target_upper[i * bindex_num + bindex_id] = get_target_numbers(cmds[2])[0];
         }
+}
         if (ENCODE) {
-          printf("\n");
+        printf("\n");
         }
       }
     }

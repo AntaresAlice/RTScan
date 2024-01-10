@@ -116,7 +116,7 @@ CODE **normalEncode(CODE **initialDataSet, int column_num, CODE encode_min, CODE
 
         // split tasks for each thread
         int threadNum = 20; // Warning: threadNum should be less than THREAD_NUM
-        int blockSize = data_num / threadNum;
+        int blockSize = (data_num + threadNum - 1) / threadNum;
         vector<map<CODE,CODE>> threadReportMap(threadNum);
         CODE *data = initialDataSet[column_id];
         POSTYPE *pos = argsort(data, data_num);
