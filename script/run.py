@@ -344,9 +344,9 @@ def RTc1_skewed():
 
 # RTScan
 # RTScan_1c_unique_1e8()
-RTScan_2c_unique_1e8()
+# RTScan_2c_unique_1e8()
 # RTScan_3c_unique_1e8()
-# RTScan_3c_skewed(encode=1)
+RTScan_3c_skewed(encode=1)
 # RTScan_3c_skewed(encode=0)
 # RTScan_3c_2p6()
 # RTScan_3c_2p6_encoding()

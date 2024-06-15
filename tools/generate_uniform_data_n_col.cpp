@@ -32,10 +32,10 @@ CODE **generateUniformData(int data_len, int col_num)
     return initial_data;
 }
 
-void saveDataToFile(CODE** data, int data_len, int col_num) 
+void saveDataToFile(CODE** data, int data_len, int col_num, char DATA_PATH2[]) 
 {
     //save data
-    char DATA_PATH2[256] = "./savefile\0";
+    // char DATA_PATH2[256] = "./savefile\0";
     FILE *fp2;
     if (!(fp2 = fopen(DATA_PATH2, "wb")))
     {
@@ -57,9 +57,9 @@ void saveDataToFile(CODE** data, int data_len, int col_num)
     printf("[+] save finished!\n");
 }
 
-void checkSavedData(int data_len, int col_num)
+void checkSavedData(int data_len, int col_num, char DATA_PATH[])
 {
-    char DATA_PATH[256] = "./savefile\0";
+    // char DATA_PATH[256] = "./savefile\0";
     FILE *fp;
 
     if (!(fp = fopen(DATA_PATH, "rb")))
@@ -147,10 +147,10 @@ int main(int argc, char *argv[])
 
     printf("[INFO] generate uniform  data len: %d col num: %d\n", data_len, col_num);
 
-    char path[] = "./uniform_data_1e8_3.dat";
+    char path[] = "data/uniform_data_1e8_3.dat";
     // getSavedData(path,data_len,col_num);
     // exit(0);
     CODE **initial_data = generateUniformData(data_len, col_num);
-    saveDataToFile(initial_data, data_len, col_num);
-    checkSavedData(data_len, col_num);
+    saveDataToFile(initial_data, data_len, col_num, path);
+    checkSavedData(data_len, col_num, path);
 }

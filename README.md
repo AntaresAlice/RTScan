@@ -22,6 +22,7 @@ export CPATH=/usr/local/cuda-12.1/include${CPATH:+:${CPATH}}
 ## Run experiments
 ```
 $ cd .
-$ mkdir optix-scan/build
+$ mkdir optix-scan/build bin log data
+$ bash script/gen_data.sh
 $ python script/run.py
 ```
