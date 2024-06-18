@@ -47,7 +47,7 @@ def RTScan_3c_2p32_encode_1e8():
     os.system(
         f'make rtscan DATA_N=1e8 DEBUG_ISHIT_CMP_RAY=0 DEBUG_INFO=0 DISTRIBUTION=0 ENCODE=1 BUILD_TYPE=Release')
     # ray_length = 1e8 / 90 = 1111111
-    args = f'-b 3 -w 1200 -m 1200 -a 1111111 -z 1 -q 11 -p test/scan_cmd_32.txt -f data/uniform_data_1e8_3.dat'
+    args = f'-b 3 -w 1200 -m 1200 -a 1111111 -z 1 -q 11 -p test/scan_cmd_32_3c.txt -f data/uniform_data_1e8_3.dat'
     cmd = f"./bin/rtscan {args} >> {output_file}"
     print(cmd)
     os.system(cmd)
@@ -66,14 +66,18 @@ def RTScan_3c_zipf_encode_1e8():
     
 def RTScan_3c_skewed(encode=1):
     logtime = time.strftime("%y%m%d-%H%M%S")
-    input_file_list = ['data/zipf1.1_data_1e8_3.dat',
-                       'data/zipf1.3_data_1e8_3.dat',
-                       'data/zipf1.5_data_1e8_3.dat',
-                       'data/normal_data_1e8_3.dat']
-    scan_file_list = ['test/zipf1.1.txt',
-                      'test/zipf1.3.txt',
-                      'test/zipf1.5.txt',
-                      'test/normal.txt']
+    input_file_list = [
+        # 'data/zipf1.1_data_1e8_3.dat',
+        'data/zipf1.3_data_1e8_3.dat',
+        # 'data/zipf1.5_data_1e8_3.dat',
+        # 'data/normal_data_1e8_3.dat',
+        ]
+    scan_file_list = [
+        # 'test/zipf1.1.txt',
+        'test/zipf1.3.txt',
+        # 'test/zipf1.5.txt',
+        # 'test/normal.txt',
+        ]
     os.system('make clean')
     os.system(f'make rtscan DATA_N=1e8 DEBUG_ISHIT_CMP_RAY=0 DEBUG_INFO=0 DISTRIBUTION=0 ENCODE={encode} BUILD_TYPE=Release')
     output_file = f"log/column3/skew/{logtime}-1e8-RTScan-skew_selec0.9-encode{encode}.log"
@@ -346,13 +350,13 @@ def RTc1_skewed():
 # RTScan_1c_unique_1e8()
 # RTScan_2c_unique_1e8()
 # RTScan_3c_unique_1e8()
-RTScan_3c_skewed(encode=1)
+RTScan_3c_skewed(encode=1) # ENCODE
 # RTScan_3c_skewed(encode=0)
 # RTScan_3c_2p6()
-# RTScan_3c_2p6_encoding()
+# RTScan_3c_2p6_encoding() # ENCODE
 
-# RTScan_3c_2p32_encode_1e8()
-# RTScan_3c_zipf_encode_1e8()
+# RTScan_3c_2p32_encode_1e8() # ENCODE
+# RTScan_3c_zipf_encode_1e8() # ENCODE
 
 # RTScan_3c_vary_sieving_vectors()
 # RTScan_3c_vary_interval_spacing()

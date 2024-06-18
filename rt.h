@@ -28,7 +28,7 @@
 #include <device_launch_parameters.h>
 #include "timer.h"
 
-#define THREAD_NUM 20
+#define THREAD_NUM 80
 #define MAX_BINDEX_NUM 256
 
 #ifndef VAREA_N
@@ -135,7 +135,7 @@ inline int bits_num_needed(int n) {
 
 CODE **normalEncode(CODE **initialDataSet, int column_num, CODE encode_min, CODE encode_max, int data_num, POSTYPE **sorted_pos, CODE **sorted_data);
 CODE **normalEncode(CODE **initialDataSet, int column_num, CODE encode_min, CODE encode_max, int data_num);
-CODE encodeQuery(int column_id, CODE old_query);
+CODE encodeQuery(int column_id, CODE old_query, string &cmd);
 bool ifEncodeEqual(const CODE val1, const CODE val2, int bindex_id);
 CODE findKeyByValue(const CODE Val, std::map<CODE, int>& map_);
 

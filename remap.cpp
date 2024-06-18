@@ -115,7 +115,7 @@ CODE **normalEncode(CODE **initialDataSet, int column_num, CODE encode_min, CODE
         printf("[+] encoding column %d\n", column_id);
 
         // split tasks for each thread
-        int threadNum = 20; // Warning: threadNum should be less than THREAD_NUM
+        int threadNum = THREAD_NUM; // Warning: threadNum should be less than THREAD_NUM
         int blockSize = (data_num + threadNum - 1) / threadNum;
         vector<map<CODE,CODE>> threadReportMap(threadNum);
         CODE *data = initialDataSet[column_id];
@@ -240,12 +240,35 @@ CODE **normalEncode(CODE **initialDataSet, int column_num, CODE encode_min, CODE
     return initialDataSet;
 }
 
-CODE encodeQuery(int column_id, CODE old_query) {
-    auto it = encodeMap[column_id].lower_bound(old_query); // 可能这个值不存在(最大时)，那么 second 就是 0，对应值映射不到
-    if (it->second == 0 && encodeMap[column_id].lower_bound(old_query >> 1)->second != 0) {
-        return (--encodeMap[column_id].end())->second + 1; // 99999999 -> 1e8，使得最后一项性能增加
+CODE encodeQuery(int column_id, CODE old_query, string &cmd) {
+    if (cmd == "lt") {
+        auto it = encodeMap[column_id].lower_bound(old_query);
+        if (it == encodeMap[column_id].end()) {
+            return N; 
+        }
+        return it->second;
+    } else if (cmd == "le") {
+        auto it = encodeMap[column_id].upper_bound(old_query);
+        if (it == encodeMap[column_id].end()) {
+            return N;
+        }
+        return it->second - 1;
+    } else if (cmd == "gt") {
+        auto it = encodeMap[column_id].upper_bound(old_query);
+        if (it == encodeMap[column_id].end()) {
+            return N;
+        }
+        return it->second;
+    } else if (cmd == "ge") {
+        auto it = encodeMap[column_id].lower_bound(old_query);
+        if (it == encodeMap[column_id].end()) {
+            return N;
+        }
+        return it->second;
+    } else {
+        printf("`eq` and `bt` are not directly supported now, and they can be transformed into `lt` + `gt`.\n");
+        exit(-1);
     }
-    return it->second;
 }
 
 CODE findKeyByValue(const CODE Val, std::map<CODE, CODE>& map_)

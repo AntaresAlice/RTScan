@@ -1,5 +1,5 @@
 lt 59
 lt 59
-lt 59
+ge 59
 exit
 zipf 1.5 90%
