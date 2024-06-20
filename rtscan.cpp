@@ -1,7 +1,7 @@
 #include "rt.h"
+#include "helper.h"
 
 Timer timer;
-
 mutex scan_refine_mutex;
 int scan_refine_in_position;
 CODE scan_selected_compares[MAX_BINDEX_NUM][2];
@@ -27,25 +27,6 @@ int cube_width = 0;
 bool READ_QUERIES_FROM_FILE = true;
 int face_direction = 1; // 0: launch rays from wide face, 1: narrow face
 bool with_refine = true;
-
-vector<string> stringSplit(const string& str, char delim) {
-    string s;
-    s.append(1, delim);
-    regex reg(s);
-    vector<string> elems(sregex_token_iterator(str.begin(), str.end(), reg, -1),
-                                   sregex_token_iterator());
-    return elems;
-}
-
-void start_timer(struct timeval* t) {
-  gettimeofday(t, NULL);
-}
-
-void stop_timer(struct timeval* t, double* elapsed_time) {
-  struct timeval end;
-  gettimeofday(&end, NULL);
-  *elapsed_time += (end.tv_sec - t->tv_sec) * 1000.0 + (end.tv_usec - t->tv_usec) / 1000.0;
-}
 
 BITS gen_less_bits(const CODE *val, CODE compare, int n) {
   // n must <= BITSWIDTH (32)
@@ -158,30 +139,6 @@ void init_bindex_in_GPU(BinDex *bindex, CODE *data, POSTYPE n, int bindex_id, PO
   free(data_sorted);
 }
 
-void memset_numa0(BITS *p, int val, int n, int t_id) {
-  cpu_set_t mask;
-  CPU_ZERO(&mask);
-  CPU_SET(t_id * 2, &mask);
-  if (pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask) < 0) {
-    fprintf(stderr, "set thread affinity failed\n");
-  }
-  int avg_workload = (n / (THREAD_NUM * SIMD_ALIGEN)) * SIMD_ALIGEN;
-  int start = t_id * avg_workload;
-  // int end = start + avg_workload;
-  int end = t_id == (THREAD_NUM - 1) ? n : start + avg_workload;
-  memset(p + start, val, (end - start) * sizeof(BITS));
-}
-
-void memset_mt(BITS *p, int val, int n) {
-  thread threads[THREAD_NUM];
-  for (int t_id = 0; t_id < THREAD_NUM; t_id++) {
-    threads[t_id] = thread(memset_numa0, p, val, n, t_id);
-  }
-  for (int t_id = 0; t_id < THREAD_NUM; t_id++) {
-    threads[t_id].join();
-  }
-}
-
 void copy_filter_vector_in_GPU(BinDex *bindex, BITS *dev_bitmap, int k, bool negation = false) {
   int bitmap_len = bits_num_needed(bindex->length);
 
@@ -223,9 +180,7 @@ int find_appropriate_fv(BinDex *bindex, CODE compare) {
     if (area_sv == compare) return i;
     if (area_sv > compare) return i - 1;
   }
-  // check if actually out of boundary here.
-  // if so, return K
-  // need extra check before use the return value avoid of error.
+  // check if actually out of boundary here; if so, return K
   if (compare <= bindex->data_max)
     return K - 1;
   else
@@ -262,7 +217,7 @@ void bindex_scan_lt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int b
   }
 
   if (area_idx > K - 1) {
-    // set skip this bindex so rt will skip the scan for this face
+    // set skip this bindex so RT will skip the scan for this face
     scan_refine_mutex.lock();
     if(!scan_skip_refine) {
       scan_skip_this_face[bindex_id] = true;
@@ -373,16 +328,6 @@ void bindex_scan_gt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int b
 
 void free_bindex(BinDex *bindex) {
   free(bindex);
-}
-
-vector<CODE> get_target_numbers(string s) {
-  stringstream ss(s);
-  string value;
-  vector<CODE> result;
-  while (getline(ss, value, ',')) {
-    result.push_back((CODE)stod(value));
-  }
-  return result;
 }
 
 // remember to free data ptr after using
@@ -528,8 +473,7 @@ void scan_multithread_withGPU(CODE target1, string search_cmd, BinDex *bindex, B
   }
 }
 
-int calculate_ray_segment_num(int direction, double *predicate, BinDex **bindexs, int best_ray_num)
-{
+int calculate_ray_segment_num(int direction, double *predicate, BinDex **bindexs, int best_ray_num) {
   int width = density_width;
   int height = density_height;
   int launch_width;
@@ -549,8 +493,7 @@ int calculate_ray_segment_num(int direction, double *predicate, BinDex **bindexs
   printf("[LOG] ray_segment_num: %d\n",ray_segment_num);
   if (ray_segment_num <= 0) {
     return 1;
-  }
-  else {
+  } else {
     return ray_segment_num;
   }
 }
@@ -923,30 +866,12 @@ void generate_point_queries(vector<CODE> &all_targets,
   }
 }
 
-size_t memory_used_by_process() {
-  FILE* file = fopen("/proc/self/status", "r");
-  int result = -1;
-  char line[128];
-  while (fgets(line, 128, file) != nullptr) {
-    if (strncmp(line, "VmRSS:", 6) == 0) {
-      int len = strlen(line);
-      const char* p = line;
-      for (; isdigit(*p) == false; ++p) {}
-      line[len - 3] = 0;
-      result = atoi(p);
-      break;
-    }
-  }
-  fclose(file);
-  return result;  // KB
-}
-
 void check(CODE **original_data, CODE *queries, string *search_cmd, int bindex_num, BITS *rt_result) {
   int bitmap_len = bits_num_needed(N);
   BITS *check_bitmap[bindex_num];
   for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
     check_bitmap[bindex_id] = (BITS *)aligned_alloc(SIMD_ALIGEN, bitmap_len * sizeof(BITS));
-    memset_mt(check_bitmap[bindex_id], 0, bitmap_len);
+    memset_mt(check_bitmap[bindex_id], 0, bitmap_len, THREAD_NUM, SIMD_ALIGEN);
   }
   for (int bindex_id = 0; bindex_id < bindex_num; bindex_id++) {
     raw_scan_entry(
