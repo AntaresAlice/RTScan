@@ -129,7 +129,7 @@ option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 set(GCC_LIBSTDCPP11 ON)
 
 # Include all CMake Macros.
-include(Macros)
+include (Macros)
 # Determine information about the compiler
 include (CompilerInfo)
 # Check for specific machine/compiler options.
@@ -429,11 +429,17 @@ endfunction()
 # If you wish to start your own sample, you can copy one of the sample's directories.
 # Just make sure you rename all the occurances of the sample's name in the C code as well
 # and the CMakeLists.txt file.
-add_subdirectory( optixScan              )
-add_subdirectory( rtscan_2c              )
-add_subdirectory( rtscan_interval_spacing)
-add_subdirectory( rtc3                   )
-add_subdirectory( rtc1                   )
+if( RT_MODE EQUAL 1 )
+  add_subdirectory( rtscan                 )
+elseif( RT_MODE EQUAL 2 )
+  add_subdirectory( rtscan_2c              )
+elseif( RT_MODE EQUAL 3 )
+  add_subdirectory( rtscan_interval_spacing)
+elseif( RT_MODE EQUAL 4 )
+  add_subdirectory( rtc3                   )
+elseif( RT_MODE EQUAL 5 )
+  add_subdirectory( rtc1                   )
+endif()
 
 # Our sutil library.  The rules to build it are found in the subdirectory.
 add_subdirectory(sutil)

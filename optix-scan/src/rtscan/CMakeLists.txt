@@ -32,7 +32,7 @@ add_definitions(-DDEBUG_ISHIT_CMP_RAY=${DEBUG_ISHIT_CMP_RAY})
 add_definitions(-DDEBUG_INFO=${DEBUG_INFO})
 add_definitions(-DSMALL_DATA_RANGE=${SMALL_DATA_RANGE})
 
-OPTIX_add_sample_executable( optixScan target_name
+OPTIX_add_sample_executable( rtscan target_name
   optixScan.cpp
   optixScan.cu
   aabb.cu
