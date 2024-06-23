@@ -1052,7 +1052,6 @@ void reset_refine_slot(int bindex_num) {
 
 int main(int argc, char *argv[]) {
   printf("N = %d, DISTRIBUTION: %d, K: %d\n", N, DISTRIBUTION, K);
-  int selectivity;
   char DATA_PATH[256] = "\0", SCAN_FILE[256] = "\0";
   int bindex_num = 3;
   parse_args(argc, argv, DATA_PATH, SCAN_FILE, bindex_num);
@@ -1071,12 +1070,8 @@ int main(int argc, char *argv[]) {
 
 #if ENCODE == 1
   timer.commonGetStartTime(20);
-  #if TPCH == 1
-  normalEncode(initial_data, bindex_num, 2, 4294967294, N, sorted_pos, sorted_data); // encoding for TPCH
-  #else
   // When obtaining the memory for the mapping table, sorted_pos and sorted_data should be freed.
   normalEncode(initial_data, bindex_num, 0, N, N, sorted_pos, sorted_data); // encoding to range [encode_min, encode_max)
-  #endif
   timer.commonGetEndTime(20);
 #endif
   cerr << "[Time] Uniform Encoding: " << timer.time[20] << endl;

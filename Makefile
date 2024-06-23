@@ -48,10 +48,6 @@ ifndef SMALL_DATA_RANGE
 	SMALL_DATA_RANGE = 0
 endif
 
-ifndef TPCH
-	TPCH = 0
-endif
-
 ifndef BUILD_TYPE
 	BUILD_TYPE = Release
 endif
@@ -63,7 +59,7 @@ else
 endif
 
 rtscan: rtscan.cpp remap.cpp rt.h helper.h ./bin/librt_cuda.a timer.h $(optix-lib)/librtscan.a
-	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DENCODE=$(ENCODE) -DTPCH=$(TPCH) -DVAREA_N=$(VAREA_N) -DDISTRIBUTION=$(DISTRIBUTION) $(GPLUS)
+	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N) -DENCODE=$(ENCODE) -DVAREA_N=$(VAREA_N) -DDISTRIBUTION=$(DISTRIBUTION) $(GPLUS)
 
 rtscan_2c: rtscan_2c.cpp rt.h ./bin/librt_cuda.a timer.h $(optix-lib)/librtscan_2c.a
 	g++ -std=c++11 $^ -o ./bin/$@ $(LDFLAGS-rtscan-2c) -mavx2 -march=native -DD_GLIBCXX_PARALLEL -DDATA_N=$(DATA_N)
