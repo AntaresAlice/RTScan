@@ -67,16 +67,16 @@ def RTScan_3c_zipf_encode_1e8():
 def RTScan_3c_skewed(encode=1):
     logtime = time.strftime("%y%m%d-%H%M%S")
     input_file_list = [
-        # 'data/zipf1.1_data_1e8_3.dat',
+        'data/zipf1.1_data_1e8_3.dat',
         'data/zipf1.3_data_1e8_3.dat',
-        # 'data/zipf1.5_data_1e8_3.dat',
-        # 'data/normal_data_1e8_3.dat',
+        'data/zipf1.5_data_1e8_3.dat',
+        'data/normal_data_1e8_3.dat',
         ]
     scan_file_list = [
-        # 'test/zipf1.1.txt',
+        'test/zipf1.1.txt',
         'test/zipf1.3.txt',
-        # 'test/zipf1.5.txt',
-        # 'test/normal.txt',
+        'test/zipf1.5.txt',
+        'test/normal.txt',
         ]
     os.system('make clean')
     os.system(f'make rtscan DATA_N=1e8 DEBUG_ISHIT_CMP_RAY=0 DEBUG_INFO=0 DISTRIBUTION=0 ENCODE={encode} BUILD_TYPE=Release')

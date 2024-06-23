@@ -237,7 +237,6 @@ void bindex_scan_lt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int b
       scan_inverse_this_face[bindex_id] = true;
     }
   }
-  printf("bindex->areaStartValues[%d]=%u\n", area_idx, bindex->areaStartValues[area_idx]);
 
   // set refine compares here
   scan_refine_mutex.lock();
@@ -248,9 +247,8 @@ void bindex_scan_lt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int b
     scan_selected_compares[bindex_id][0] = bindex->areaStartValues[area_idx];
     scan_selected_compares[bindex_id][1] = compare;
   }
-
-  if(DEBUG_INFO) printf("area[%d]\n", area_idx);
-  if(DEBUG_INFO) printf("comapre[%d]: %u %u\n", bindex_id, scan_selected_compares[bindex_id][0], scan_selected_compares[bindex_id][1]);
+  printf("bindex->areaStartValues[%d]=%u, comapre[%d]: %u %u\n", 
+    area_idx, bindex->areaStartValues[area_idx], bindex_id, scan_selected_compares[bindex_id][0], scan_selected_compares[bindex_id][1]);
   scan_refine_in_position += 1;
   scan_refine_mutex.unlock();
 
@@ -262,8 +260,6 @@ void bindex_scan_lt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int b
 }
 
 void bindex_scan_gt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int bindex_id) {
-  compare = compare + 1;
-
   int bitmap_len = bits_num_needed(bindex->length);
   int area_idx = find_appropriate_fv(bindex, compare);
 
@@ -314,10 +310,16 @@ void bindex_scan_gt_in_GPU(BinDex *bindex, BITS *dev_bitmap, CODE compare, int b
   // set refine compares here
   scan_refine_mutex.lock();
   scan_selected_compares[bindex_id][0] = compare;
-  if (area_idx + 1 < K)
+  if (area_idx + 1 < K) {
     scan_selected_compares[bindex_id][1] = bindex->areaStartValues[area_idx + 1];
-  else 
+    printf("bindex->areaStartValues[%d]=%u, comapre[%d]: %u %u\n", 
+      area_idx + 1, bindex->areaStartValues[area_idx + 1], bindex_id, scan_selected_compares[bindex_id][0], scan_selected_compares[bindex_id][1]);
+  } else {
     scan_selected_compares[bindex_id][1] = bindex->data_max;
+    printf("bindex->areaStartValues[%d]=%u, comapre[%d]: %u %u\n", 
+      area_idx, bindex->areaStartValues[area_idx], bindex_id, scan_selected_compares[bindex_id][0], scan_selected_compares[bindex_id][1]);
+  } 
+  
   scan_refine_in_position += 1;
   scan_refine_mutex.unlock();
 
@@ -459,14 +461,10 @@ void raw_scan_entry(CODE target1, string search_cmd, BITS* bitmap, BITS* mergeBi
 }
 
 void scan_multithread_withGPU(CODE target1, string search_cmd, BinDex *bindex, BITS *bitmap, int bindex_id) {
-  if (search_cmd == "lt") {
+  if (search_cmd == "lt" || search_cmd == "le") {
     bindex_scan_lt_in_GPU(bindex, bitmap, target1, bindex_id);
-  } else if (search_cmd == "le") {
-    bindex_scan_lt_in_GPU(bindex, bitmap, target1 + 1, bindex_id);
-  } else if (search_cmd == "gt") {
+  } else if (search_cmd == "gt" || search_cmd == "ge") {
     bindex_scan_gt_in_GPU(bindex, bitmap, target1, bindex_id);
-  } else if (search_cmd == "ge") {
-    bindex_scan_gt_in_GPU(bindex, bitmap, target1 - 1, bindex_id);
   } else {
     printf("Error: Invalid operator %s\n", search_cmd.c_str());
     exit(-1);
