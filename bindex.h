@@ -29,7 +29,7 @@
 #include <device_launch_parameters.h>
 #include "timer.h"
 
-#define THREAD_NUM 80
+#define THREAD_NUM 20
 #define MAX_BINDEX_NUM 256
 
 #ifndef VAREA_N
